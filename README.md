@@ -195,4 +195,42 @@ int main()
     return 0;
 }
 ```
-函数包装器可以将成员函数单独进行包装，其他地方在调用成员函数时可以直接使用，不用将对象传递，一般都用在回调函数
+函数包装器可以将成员函数单独进行包装，其他地方在调用成员函数时可以直接使用，不用将对象传递，一般都用在回调函数里 类似于C里的函数指针进行回调
+
+#### 2.5.3 多线程与回调函数
+1. Python
+
+Python写好后 记得添加到 setup.py里,然后colcon build 再soruce改变环境变量
+![alt text](image-4.png)这里是打开服务器并下载其中内容的方法，类似于爬虫
+
+```python
+import threading
+import requests
+class download:
+    def download(self,url,callback_word_count):
+        print(f"线程{threading.get_ident()}开始下载:{url}")
+        """
+        模拟下载，实际是请求url并获取文本内容
+        """
+        response = requests.get(url)
+        response.encoding = 'utf-8'
+        callback_word_count(url,response.text)
+
+    def start_download(self,url,callback_word_count):
+        thread = threading.Thread(target=self.download,args=(url,callback_word_count))
+        thread.start()
+
+
+def world_count(url,result):
+    """
+    普通函数，后续用于回调
+    """
+    print(f"{url}:{len(result)}->{result[:]}")
+
+def main():
+    downloader = download()
+    downloader.start_download("http://0.0.0.0:8000/novel1.txt", world_count)
+    downloader.start_download("http://0.0.0.0:8000/novel2.txt", world_count)
+    downloader.start_download("http://0.0.0.0:8000/novel3.txt", world_count)
+    ```
+    
