@@ -232,5 +232,70 @@ def main():
     downloader.start_download("http://0.0.0.0:8000/novel1.txt", world_count)
     downloader.start_download("http://0.0.0.0:8000/novel2.txt", world_count)
     downloader.start_download("http://0.0.0.0:8000/novel3.txt", world_count)
-    ```
-    
+```
+git clone https://gitee.com/fishros/cpp-httplib.git
+这个是cpp的http库 用法在其readme里
+函数包装器的声明是&，不用写具体变量名，是一种声明
+
+```cpp
+#include <iostream>
+#include <thread>                //多线程
+#include <chrono>                //时间 计时的 adj. 类似于time.h
+#include <functional>            //函数包装器
+#include <cpp-httplib/httplib.h> //HTTP库
+
+class Download
+{
+private:
+    /* data */
+public:
+    void download(const std::string &host, const std::string &path, const std::function<void(const std::string &, const std::string &)> &callback)
+    {
+
+        std::cout << "线程" << std::this_thread::get_id() << std::endl;
+        httplib::Client client(host);
+        auto response = client.Get(path);
+        if (response && response->status == 200)
+        {
+            std::cout << "下载成功！" << std::endl;
+            callback(path, response->body);
+        }
+        else
+        {
+            std::cout << "下载失败！" << std::endl;
+        }
+        // httplib::Client cli(host.c_str());
+        // auto res = cli.Get(path.c_str());
+        // if(res && res->status == 200)
+        // {
+        //     std::cout << "下载成功！" << std::endl;
+        //     std::cout << "内容：" << res->body << std::endl;
+        // }
+        // else
+        // {
+        //     std::cout << "下载失败！" << std::endl;
+        // }
+    };
+    void start_download(const std::string &host, const std::string &path, const std::function<void(const std::string &, const std::string &)> &callback) {
+        // std::thread t(&Download::download, this, host, path, callback);
+        // t.detach(); //分离线程
+        auto download_fun = std::bind(&Download::download, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3); //绑定成员函数和参数
+        std::thread thread(download_fun,host,path,callback);
+        thread.detach();
+    };
+};
+
+int main()
+{
+    auto d = Download();
+    auto word_count = [](const std::string &path, const std::string &result) -> void
+    {
+        std::cout << "下载完成" << path << ':' << result.length() << "->" << result.substr() << std::endl;
+    };
+    d.start_download("http://0.0.0.0:8000", "/novel1.txt", word_count);
+    d.start_download("http://0.0.0.0:8000", "/novel2.txt", word_count);
+    d.start_download("http://0.0.0.0:8000", "/novel3.txt", word_count);
+
+    std::this_thread::sleep_for(std::chrono::seconds(5)); // 主线程等待5秒
+}
+```
