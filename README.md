@@ -383,4 +383,158 @@ ros2 topic pub /turtle1/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 1.0 , y: 0
 请注意Yaml的严格发布格式,冒号后有空格等,默认发布频率是1Hz,可以使用ros2 pub --help 查看相关命令 例如 ros2 topic --r N 可以改变频率 
 
 ## 3.2 Python话题的订阅与发布
+### 3.2.1 通过话题发布小说
+```bash
+ ros2 pkg create demo_python_topic --build-type ament_python --dependencies rclpy example_interfaces --license Apache-2.0
+```
+1. ros2 pkg create
+
+    作用：ROS 2 官方提供的创建功能包工具
+    含义：我要新建一个 ROS 2 包
+    相当于：mkdir + 自动生成CMakeLists/package.xml + 模板代码
+
+2. demo_python_topic
+
+    这是自定义的【功能包名字】
+    可以随便取，比如：my_talker, robot_comm, test_pkg
+    这里取名 demo_python_topic 意思是：
+        demo：示例
+        python：用 Python 写
+        topic：用于话题通信
+
+3. --build-type ament_python
+
+    --build-type：指定编译类型
+    ament_python：表示这是 Python 版 ROS 2 包
+>   ament_python = Python 项目
+>
+>   ament_cmake = C++ 项目
+
+4. --dependencies rclpy example_interfaces 
+
+自动给功能包添加依赖库 这里实际上就是自动将依赖填写进入package.xml里,跟以前手动写是一样的
+
+interface:接口的意思
+
+① rclpy
+
+    ROS 2 Python 核心库
+    所有 Python 节点必须依赖它
+    相当于：import rclpy 
+
+② example_interfaces
+
+    ROS 2 官方提供的示例接口（消息 / 服务）
+    里面有常用的：
+        String 字符串消息
+        AddTwoInts 加法服务
+    做话题 / 服务通信一定会用到   到时候需要使用string
+
+1. --license Apache-2.0
+
+    指定代码开源许可证
+    Apache-2.0 是 ROS 2 默认许可证
+    不影响功能，只是代码规范
+
+创建完功能包后,在工作空间进行colcon build,完毕后就可以在/src/demo_python_topic里写代码了
+
+代码写完,记住先去setup.py里添加路径,然后source环境变量,再ros2 run 找相应的节点运行.
+
+```python
+import rclpy
+from rclpy.node import Node
+import requests
+from example_interfaces.msg import String   
+from queue import Queue
+
+
+
+class NovelPubNode(Node):
+    def __init__(self,node_name): 
+        super().__init__(node_name)
+        self.get_logger().info(f'{node_name} was created')
+        self.novel_queue_ = Queue()  #创建队列
+        self.novel_publisher_ = self.create_publisher(String, 'novel', 10)
+        self.create_timer(5.0, self.timer_callback)
+
+    def timer_callback(self):
+        if not self.novel_queue_.empty():
+            line = self.novel_queue_.get()
+            msg = String()
+            msg.data = line
+            self.novel_publisher_.publish(msg)
+            self.get_logger().info(f'Novel content published: {msg.data}')
+
+    def download(self,url):
+            response = requests.get(url)
+            response.encoding = 'utf-8'
+            text = response.text
+            self.get_logger().info(f'Novel content:{text}')
+            for line in text.splitlines( ): 
+                self.novel_queue_.put(line)  #将每行文本放入队列
+            self.get_logger().info('Novel download completed')  
+
+
+def main():
+    rclpy.init()
+    node = NovelPubNode('novel_pub')
+    node.download("http://0.0.0.0:8000/novel2.txt")
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+```
+打开服务器的命令:python3 -m http.server
+可以拆分终端,输入ros2 topic list -v 查看当前话题是否有我们注册的
+也可以使用 ros2 topic echo /novel 查看实时话题内容
+还有 ros2 topic hz /novel 来查看当前发送频率(我们这里是5s发送一次)
+
+### 3.2.2 订阅小说并合成语音
+需要安装:
+sudo apt install python3-pip -y 安装包管理工具 
+pip3 install espeakng  这是python的一个包
+sudo apt install espeak-ng 安装这个
+都安装好
+```python
+import espeakng
+import rclpy
+from rclpy.node import Node
+from example_interfaces.msg import String   
+from queue import Queue
+import threading
+import time 
+
+class NovelSubNode(Node):
+    def __init__(self,node_name): 
+        super().__init__(node_name)
+        self.get_logger().info(f'{node_name} was created')
+        self.noevels_queue_ = Queue()  #创建队列
+        self.novel_subscriber = self.create_subscription(String, 'novel', self.novel_callback, 10)
+        self.speech_thread_ = threading.Thread(target=self.speak_thread)
+        self.speech_thread_.start()
+    def novel_callback(self, msg):
+        self.noevels_queue_.put(msg.data)  #将接收到的消息放入队列
+    def speak_thread(self):
+        speaker = espeakng.Speaker()
+        speaker.voice = 'zh'
+        while rclpy.ok(): # 检测当前ros上下文是否ok
+            if not self.noevels_queue_.empty():
+                text = self.noevels_queue_.get()
+                self.get_logger().info(f'Novel content received: {text}')
+                speaker.say(text)  # 使用espeak-ng库进行文本转语音
+                speaker.wait()  # 等待语音播放完成
+            else:
+                time.sleep(1)  # 如果队列为空，稍微休眠一下，避免CPU占用过高
+                # rclpy.sleep(0.1)  # 如果队列为空，稍微休眠一下，避免CPU占用过高
+
+
+def main():
+    rclpy.init()
+    node = NovelSubNode('novel_sub')
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+```
+写完代码之后 去setup.py 添加路径 然后colcon build 
+source 改变环境变量
+再ros2 run 即可
 
