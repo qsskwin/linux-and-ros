@@ -1,5 +1,19 @@
 # Linux 的 ros 笔记
 
+
+# 第一章 启程
+
+
+
+
+
+# 第二章 节点
+
+# 2.1
+# 2.2
+# 2.3
+
+
 ## 2.4 多功能包的最佳实践 Workspace
 
 一般在总文件夹里创建一个新的两级文件夹，然后把包mv进这些文件夹中，再进行colcon build。如果有多个包，他们之间有依赖关系，需要在package.yml里写depend
@@ -311,3 +325,62 @@ int main()
  detach的原因则是函数内运行完毕后会类似栈直接销毁，析构的时候发现线程还在运行的话会报错，加入detach则是当析构的时候不报错，让线程继续运行。
 
 join则是让主线程等待子线程运行完毕。理论上如果子线程是在main里没有被析构，运行时间远小于主线程，其实不写也可以，只是因为 C++ 这样规定，所以必须 join 或 detach，防呆，保证线程的绝对安全。
+
+# 第三章 话题
+
+# 3.1 话题通信介绍
+
+```bash
+ros2 run turtlesim turtlesim_node
+```
+创建一个小海龟节点
+```bash
+ros2 node list 
+```
+打印当前节点
+当前节点名字会出现 /turtlesim
+得分清 turtlesim是功能包名 turtlesim_node 是功能包下被编译出来的的可执行程序文件名 /turtlesim是该程序源码里定义的名字
+```bash
+ros2 node info /turtlesim
+```
+可以看见/turtlesim这个节点里的信息
+![alt text](image-5.png)
+其中  /turtle1/cmd_vel: geometry_msgs/msg/Twist 是话题名称和话题接口 用于控制小海龟的
+
+/turtle1/pose: turtlesim/msg/Pose 是小海龟的实时位置信息
+```bash
+ros2 topic -h
+```
+ 可以查看命令帮助 关于topic的
+ ![alt text](image-6.png)
+```bash
+ros2 topic echo /turtle1/pose
+```
+可以输出该话题的内容
+
+![alt text](image-7.png)
+theta是弧度制,是前向角度
+
+```bash
+rps2 topic info /turtle1/cmd_vel
+```
+可以查看该话题的接口类型
+![alt text](assets/README/image.png)
+
+```bash
+ros2 interface show /xxx
+```
+可以查看消息接口的详细信息,/xxx即是消息接口的名字
+![alt text](assets/README/image-1.png)
+
+ros2的坐标系是右手坐标系,x轴朝上,y轴朝左 z朝屏幕向外  (二维平面下)
+
+---
+```bash
+ros2 topic pub /turtle1/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 1.0 , y: 0.0} , angular: {z: -1.0} }"
+```
+该命令是进行命令的pub发送 第四个参数是节点名称 第五个参数是节点接口 
+请注意Yaml的严格发布格式,冒号后有空格等,默认发布频率是1Hz,可以使用ros2 pub --help 查看相关命令 例如 ros2 topic --r N 可以改变频率 
+
+## 3.2 Python话题的订阅与发布
+
