@@ -2,6 +2,142 @@
 
 
 # 第一章 启程
+apt = Advanced Package Tool  
+dpkg -i xxx.deb   # 安装  -i = i-install  
+dpkg -l           # 列出已装包  
+这种安装方式只能安装已经有的deb安装包，不能处理已经依赖关系等，不会更新软件源，不会联网。  
+sudo apt install xxx 这种会联网从软件源下载(这就涉及到了我们最开始的linux换源)，apt可以管理软件源的升级，更新，实际上其底层还是调用的dpkg -i这种。   
+```bash
+apt update        # 更新源信息    
+apt install git   # 安装并自动解决依赖    
+apt upgrade       # 升级所有包  
+```
+nano xxx.txt 可以使用linux自带的文本编辑器进行文本编辑，当然还有gedit等。  
+cat /xxx 可以用于查看当前文件的内容，会在终端中进行显示  
+cmake .是编译当前目录下的文件， cmake ..是上一级  
+---
+写最简单的代码进行调试：如果是python的话，随便写点，然后在终端相应目录使用python3 xxx.py即可运行，python3是linux22.04安装会自带的版本。是解释语言，也不用像c和cpp一样需要编译。不过这样也导致了效率没有c和cpp高。  
+cpp的话则需要在对应目录终端使用g++ xxx.cpp进行编译，编译成可执行文件运行。一般后缀是a.out (linux) 运行的话是./a.out  
+这种是最传统的编写方式，针对单文件来说当然可以，但如果文件一旦多起来，需要相互串联，那么就很复杂，一般是g++ a.cpp b.cpp c.cpp -o qss
+这种就会生成一个qss.out的文件，使用./qss.out就可以进行输出。
+想带调试信息就是 g++ -g a.cpp ...    -g代表着gdb，方便打断点调试  
+g++ -Wall ... 则是显示所有警告  
+
+因此这样做是不太好的，于是引入了makefile文件来做这个事情，将所有的命令通过makefile文件及其语法写好，然后使用make指令，就可以编译了，make指令调用的就是makefile文件，makefile文件里都是跟我们刚才说的g++ 类似的有关的语法，展开就形成了g++命令进行文件编译。
+
+但makefile编写人们觉得还是很麻烦，很困难，因此在考虑有没有更简便的工具，于是就有了cmake工具，cmake工具可以使用cmake . 在当前目录下寻找指导其生成makefile文件的CMakeLists.txt，然后生成对应的makefile，最后再make就可以编译啦，cmakelist的相关语法自行进行查阅。
+
+紧接着，make 可以在后面加入-j24 -j12等，启用多核编译，但人们还是觉得大型工程编译慢，后续又推出了cmake生成build-ninja，再ninja工具进行编译的工具，自行进行查阅。
+
+
+
+
+
+
+
+
+ros2 中的ament前缀是有渊源的，ros1中是catkin ros2中是ament  
+catkin 这个名字，有明确的官方来源和三层「深意」，不是随便取的。
+ROS 文档与社区明确说明：
+> The name catkin comes from the tail-shaped flower cluster found on willow trees — a reference to Willow Garage where catkin was created.
+> （catkin 名字来自柳树上的尾状花簇 —— 致敬创造它的公司 **Willow Garage**）
+
+- **Willow Garage**：ROS 1 的诞生地（“柳树车库”）
+- **Catkin**：柳树的柔荑花序/柳絮/柳花
+
+直接关联：柳树（Willow）→ 柳絮（Catkin）
+
+---
+
+### 二、词源深意（小彩蛋）
+`catkin` 词源本身也很巧：
+- 源自中古荷兰语 **katteken** = **little cat（小猫咪）**
+- 因为柳絮柔软、毛茸茸、像**小猫尾巴**
+
+**双关**：
+- 表面：柳树的花（致敬 Willow Garage）
+- 深层：**小猫尾巴** → 可爱、轻量、灵活（隐喻构建系统的设计哲学）
+
+---
+
+### 三、技术隐喻（架构深意）
+catkin 作为构建系统，名字也暗合设计理念：
+- **一串多花**：一个 catkin 花序 = 很多小花 → 对应 **一个工作空间 = 很多功能包**
+- **有序下垂、结构清晰**：对应 **包依赖拓扑、有序编译、层次分明**
+- **随风传播、易于扩散**：对应 **ROS 包生态、易于分发、跨平台**
+
+---
+
+### 四、和 ament 的呼应
+- **catkin**：柳树的柔荑花序（ROS 1）
+- **ament**：**同义词**，也是柔荑花序（ROS 2）
+
+**寓意**：
+- 一脉相承（构建系统思想）
+- 全新独立（不冲突、不混淆）
+- 植物学小彩蛋贯穿 ROS 两代
+
+---
+**catkin = 柳树的柳絮 → 致敬 Willow Garage；词源是“小猫尾巴”（可爱轻量）；隐喻多包有序、生态扩散。**
+
+colcon build 构建命令 colcon: col + con  
+col = collective  集体的 一起的
+con = construction 构建
+
+在ros1里 用的是 catkin_make catkin_build 分开的 现在被合并了
+
+ament 定义包怎么写，例如cmakelists.txt package.xml
+colcon 负责编译
+
+ros2在安装过程中，会将自身需要的环境变量加入到AMENT_PREFIX_PATH中，因此用ros2 run 的时候会在该系统环境变量下找相应的路径或者资源。 为什么在后续运行节点的时候 需要先进行source install/setup.bash ，就是ros2为你写好了一个一键执行的bash指令，从而把colcon build生成的可执行文件等路径添加到系统变量中。
+
+***ros2为什么能通过修改环境变量rcutils console修改输出的日志格式：***   
+ROS 2 能通过 **RCUTILS_CONSOLE_OUTPUT_FORMAT** 等环境变量改日志格式，核心是：**日志系统底层是 rcutils，启动时主动读环境变量 → 全局格式化模板 → 所有日志宏共用 → 一设全进程生效**。
+
+### 1. 架构：谁负责日志？
+- **rcutils**：ROS 2 的底层 C 工具库，**提供最基础的日志宏与格式化引擎**
+  - `RCUTILS_LOG_INFO` / `RCUTILS_LOG_ERROR` 等
+  - 所有上层（`rcl`/`rclcpp`/`rclpy`）都基于它
+- **全局单例**：进程内只有一套日志配置，**所有节点共享**
+
+### 2. 环境变量如何生效（关键流程）
+1. **进程启动 → 日志系统初始化**
+   - `rcutils_logging_initialize()` 自动执行
+   - 内部调用：**读取环境变量**
+     - `RCUTILS_CONSOLE_OUTPUT_FORMAT`
+     - `RCUTILS_COLORIZED_OUTPUT`
+     - `RCUTILS_LOGGING_USE_STDOUT` 等
+
+2. **解析格式字符串 → 生成模板**
+   - 把 `[{severity}] [{time}] {message}` 这类字符串
+   - 解析成**可替换的字段模板**
+     - `{severity}` / `{time}` / `{name}` / `{message}` / `{function_name}` / `{file_name}` / `{line_number}`
+
+3. **全局生效：所有日志都用这个模板**
+   - 每次 `RCLCPP_INFO` / `RCLCPP_ERROR` 时
+   - 底层调用 rcutils：**按模板拼接字符串 → 输出到控制台**
+
+### 3. 为什么用环境变量（设计意图）
+- **无需改代码、无需重新编译**
+  - 调试时临时改格式：`export RCUTILS_CONSOLE_OUTPUT_FORMAT="..."`
+  - 运行时生效，适合调试/部署/CI
+- **进程全局、统一风格**
+  - 一个设置影响**当前进程所有节点**
+  - 避免每个节点单独配置
+- **跨语言一致**
+  - C++/Python/Java 都用同一套 rcutils 底层
+  - 环境变量对所有语言节点有效
+
+### 4. 极简原理一句话
+**rcutils 在初始化时读取 RCUTILS_* 环境变量 → 保存全局格式模板 → 每条日志都按这个模板格式化 → 一设全进程生效。**
+
+### 常用变量速查
+- `RCUTILS_CONSOLE_OUTPUT_FORMAT`：格式字符串
+- `RCUTILS_COLORIZED_OUTPUT`：0/1 强制关/开颜色
+- `RCUTILS_LOGGING_USE_STDOUT`：1 改输出到 stdout
+- `RCUTILS_LOG_LEVEL`：全局日志级别（DEBUG/INFO/WARN/ERROR/FATAL）
+ 
+
 
 
 
@@ -9,7 +145,9 @@
 
 # 第二章 节点
 
-# 2.1
+# 2.1 编写你的第一个节点
+## 2.1.1 Python
+`node.get_logger().info('xxxxxx')`这个代码应理解为，node这个对象，调用其成员函数get_logger() 这个成员函数的返回值又是一个对象，然后再.info，调用返回值对象的成员函数，该成员函数就是日志打印。 
 # 2.2
 # 2.3
 
