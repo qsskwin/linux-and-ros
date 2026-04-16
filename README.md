@@ -29,13 +29,7 @@ g++ -Wall ... 则是显示所有警告
 
 紧接着，make 可以在后面加入-j24 -j12等，启用多核编译，但人们还是觉得大型工程编译慢，后续又推出了cmake生成build-ninja，再ninja工具进行编译的工具，自行进行查阅。
 
-
-
-
-
-
-
-
+---
 ros2 中的ament前缀是有渊源的，ros1中是catkin ros2中是ament  
 catkin 这个名字，有明确的官方来源和三层「深意」，不是随便取的。
 ROS 文档与社区明确说明：
@@ -148,7 +142,66 @@ ROS 2 能通过 **RCUTILS_CONSOLE_OUTPUT_FORMAT** 等环境变量改日志格式
 # 2.1 编写你的第一个节点
 ## 2.1.1 Python
 `node.get_logger().info('xxxxxx')`这个代码应理解为，node这个对象，调用其成员函数get_logger() 这个成员函数的返回值又是一个对象，然后再.info，调用返回值对象的成员函数，该成员函数就是日志打印。 
-# 2.2
+## 2.1.2 C++
+```cpp
+#define RCLCPP_INFO(logger, ...) \
+  logger->log(INFO, __FILE__, __LINE__, __VA_ARGS__)
+
+  RCLCPP_INFO(node->get_logger(), "hello"); //我们使用的
+
+  node->get_logger()->log(
+    rcutils_log_severity_t::RCUTILS_LOG_SEVERITY_INFO,
+    __FILE__,  // 自动帮你加文件名
+    __LINE__,  // 自动帮你加行号
+    "hello"
+); //编译器实际看到的
+宏展开时，编译器会将__FILE__自动替换成当前文件名，__LINE__自动替换成当前行。 跟if else这种一样，编译器天生就认识。
+```
+---
+`int main(int argc, char **argv)`
+其中的参数 一个是Argument Count = argc  参数的数量
+还一个参数是 Argument vector = argv     参数的具体内容(字符串数组)  
+argc 是一个整数，表示你在命令行输入的时候，一共敲了多少个单词，程序名本身也算一个  
+argv 是一个字符串数组，存入的是你在命令行输入的每一个单词  
+你在终端运行：
+```bash
+./my_app 123 hello world
+```
+argc = 4因为有 4 个单词：./my_app、123、hello、world  
+argv 是这样的：
+``` bash
+argv[0] = "./my_app"
+argv[1] = "123"
+argv[2] = "hello"
+argv[3] = "world"
+```
+在cmake中  
+使用find_package(xxx REQUIRED)找依赖，还会嵌套找xxx所需的依赖  
+使用target_include_directories(文件名，头文件路径)  
+target_link_libraries(文件名 库路径)进行头文件和库文件的依赖添加  
+在vscode里的标红只是插件的报错，并不代表着编译会不通过，插件和编译库这俩是分开的，可以编译插件的includepath进行添加报错文件的路径进行添加  
+
+# 2.2 使用功能包组织Python节点
+## 2.2.1 Python
+colcon build会生成三个文件夹，其中 build是构建过程中产生的中间文件，install是放置构建结果的，log则是生成的日志信息等。  
+为什么要使用setup.bash修改环境变量？  
+因为我们写的代码经colcon build编译后，生成的功能包，节点等代码文件，其目录都在install目录下，而ros2 run只会通过AMENT_PREFIX_PATH的路径查找功能包和节点，因此需要修改该环境变量的值来查找功能包，所以就要运行setup.bash。该命令是ros2官方为我们写好了，colcon build的时候会自动生成。 使用`source install/setup.bash`即可更改。  
+
+包含__init__.py的文件夹，表示该文件夹是python的一个功能包.该文件默认为空。
+resource文件夹提供功能包标识，可以不用管  
+test用于存放代码单元测试的文件  
+lincense是协议许可  
+package.xml是功能包清单，声明了功能包名称，构建类型，依赖等信息，需要在里面添加依赖，在后续可以在创建包命令里填写  
+```bash
+ ros2 pkg create demo_python_topic --build-type ament_python --dependencies rclpy example_interfaces --license Apache-2.0
+```
+在创建包的时候就添加  
+setup.cfg是普通的文本文件，就放包的配置选项，这些配置在构建的时候会被读取和处理。  
+setup.py则是python包的构建脚本文件，其中包含一个setup()函数，用于指定如何构建和安装python包，有点类似cmakelist.txt
+
+
+## 2.2.2 C++
+
 # 2.3
 
 
