@@ -133,6 +133,7 @@ ROS 2 能通过 **RCUTILS_CONSOLE_OUTPUT_FORMAT** 等环境变量改日志格式
  
 
 
+rclcpp.rclcpp.hpp头文件报错 添加/opt/ros/humble/include/**在includepath中 
 
 
 
@@ -747,3 +748,65 @@ source 改变环境变量
 
 ## 3.3.1 发布速度控制小海龟画圆
 
+首先`ros2 run turtlesim turtlesim_node`,即运行turtlesim功能包下的turtlesim_node节点,启动小海龟模拟器  
+然后使用`ros2 node list`可以显示当前节点有哪些,可以发现turtlesim这个节点,请分清,上面那个命令的turtlesim是功能包的名字,turtlesim_node是可执行的文件名,这个可执行文件里应该是初始化节点名为turtlesim,因此在这里可以看见节点的名字是turtlesim,不要误以为是功能包  
+然后使用`ros2 topic list` 可以查看当前话题有哪些,命令后面可以跟-t 显示话题接口  
+没运行小海龟模拟器之前,只有parameter_events和rosout两个话题,运行后会多出三个   
+```bash
+/turtle1/cmd_vel [geometry_msgs/msg/Twist]
+/turtle1/color_sensor [turtlesim/msg/Color]
+/turtle1/pose [turtlesim/msg/Pose]
+```
+
+使用`ros2 node info /turtlesim` 可以查看这个节点发布了哪些话题,话题接口是什么,订阅了哪些话题,订阅接口是什么   
+然后我们要自己编写节点,因此先创建功能包,回到工作空间,使用`ros2 pkg create demo_cpp_topic --build-typde ament_cmake --dependencies rclcpp geometry_msgs turtlesim --license Apache-2.0` 创建功能包 rclcpp geometry_msgs turtlesim 都是功能包的名字,因为我们创建的新功能包下写的节点需要依赖这三个功能包.分别是ros2的官方功能包, 提供C++核心库,geometry_msgs功能包,提供各种消息类型,turtlesim功能包,里面是小海龟,也就是我们的控制的对象.这样其实就加入到了我们cmakelist和xml里了   
+这些包写入的含义就是我们写代码的时候需要引入头文件,这些功能包这样加入之后,我们就可以‵#include‵相关的头文件,来使用其他功能包里的代码,比如`rclcpp.init()`出自rclcpp功能包,`auto message = geometry_msgs::msg::Twist();`创建一个Twist消息对象,因为小海龟模拟器的turtlesim节点默认订阅的就是该话题接口,得使用这个(得理解一下,说的不够清晰),还有turtlesim,可以获得小海龟发布的话题接口,获取其当前位置,可以做闭环  
+
+```cpp
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <chrono>
+    
+using namespace std::chrono_literals;
+
+class TurtleCircleNode : public rclcpp::Node
+{
+private:
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_; // 发布者的智能指针
+    rclcpp::TimerBase::SharedPtr timer_;
+
+public:
+    explicit TurtleCircleNode(const std::string &node_name) : Node(node_name)
+    {
+        publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("turtle1/cmd_vel", 10); // 创建发布者，发布到/turtle1/cmd_vel话题，队列大小为10
+        timer_ = this->create_wall_timer(
+            1000ms,                                            // 定时器周期为100ms
+            std::bind(&TurtleCircleNode::timer_callback, this) // 绑定定时器回调函数
+        );
+    }
+
+    void timer_callback()
+    {
+        auto message = geometry_msgs::msg::Twist(); // 创建一个Twist消息对象
+        message.linear.x = 1.0; // 设置线速度为1.0
+        message.angular.z = 0.5; // 设置角速度为0.5
+        publisher_->publish(message); // 发布消息 
+    }
+};
+
+int main(int argc, char * argv[])
+{
+    rclcpp::init(argc, argv); // 初始化ROS 2
+    auto node = std::make_shared<TurtleCircleNode>("turtle_circle_node"); // 创建节点实例
+    rclcpp::spin(node); // 进入循环，等待回调函数被调用
+    rclcpp::shutdown(); // 关闭ROS 2 
+}
+```
+
+值得注意的是,`rclcpp::publisher`的这个publisher不在rclcpp.hpp里,但rclcpp.hpp里又包含了node.hpp,node.hpp里有publisher.hpp,最终完成了嵌套,从而找到了这个publisher,在publisher.hpp里,使用了namespace包含了这个publisher类,因此需要使用rclcpp::publisher  
+`publisher<xx>`是一个模板类,xx传入的是什么,就是什么这个类就是xx类,::SharedPtr 是这个类里定义的一个智能指针别名,等于`std::shared_ptr< Publisher<T> >`,有点类似typdef   
+所以` rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_; // 发布者的智能指针`的意思就是声明了一个变量,变量名叫做publisher_,这个变量是一个智能指针变量,变量的类型是`rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr`,它里面以后可以存的以publisher实例化的一个对象的内存地址   
+
+`publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("turtle1/cmd_vel", 10); // 创建发布者，发布到/turtle1/cmd_vel话题，队列大小为10`这里是真的创建了一个发布者对象,使用create_publisher<>()函数,<>里填入要实例化的对象的类,然后将这个对象的智能指针返回出来,给publisher_   
+`create_wall_timer`这个函数是父类里的成员函数,但其参数需要用到chrono里的东西,所以需要引入chrono的头文件  
+auto message那句等同于`geometry_msgs::msg::Twist message;`  
