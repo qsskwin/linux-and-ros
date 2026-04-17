@@ -219,7 +219,7 @@ mv demo_python_pkg/chapt2_ws/src/
 ## 2.5 ROS2基础之编程学习
 
 ### 2.5.1 面向对象编程
-
+在python中，所有的python类内部的方法第一个参数默认都是self，代表其本身，类似于Cpp的this指针
 #### Python
 
 ```python
@@ -242,17 +242,22 @@ def main():
     person_node.eat('苹果')
     person_node1.eat('香蕉')
 ```
-![alt text](image.png) 在src的对应的python_pkg创建文件，并编写，编写完毕后，在src下的setup.py中填写自己的路径（填写在entry_points）中
-![alt text](image-2.png) 第一个名字是后续colcon生成的节点名字，后面的是路径，：代表要运行的函数
+![alt text](assets\README\image.png) 在src的对应的python_pkg创建文件，并编写，编写完毕后，在src下的setup.py中填写自己的路径（填写在entry_points）中  
+![alt text](assets\README\image-2.png)   
+第一个名字是后续colcon生成的节点名字，后面的是路径，：代表要运行的函数
 注意，colcon build 命令的使用会产生三个文件，最好在ws的文件夹的这个目录下进行colcon build
 关于继承等方面的，python的话建议去chapt2自行查看源码
-注意，继承是没办法继承import的文件的，还是得import一下。
+注意，继承是没办法继承import的文件的，还是得import一下。    
+
+Python的继承：这一章节可以看ros2的书，在第四十九页  
+继承后要使用父类的话ua，需要加入super().xxx xxx是父类的构造函数，成员函数等.
 
 #### C++
 
 include <rclcpp/rclcpp.hpp>的原因是在opt/ros/humble/include下，rclcpp.hpp中嵌套了其他的例如node的文件，都在include这个文件夹下，因此如果把路径配置成include/rclcpp，这样确实可以只写 #include <rclcpp.hpp>，但其调用其他文件时会找不到嵌套依赖，仍然会报错。
 
 ```Cpp
+#include <string>
 #include <rclcpp/rclcpp.hpp>
 
 class PersonNode : public rclcpp::Node
@@ -290,9 +295,12 @@ int main(int argc, char *argv[])
 说一下流程：
 1. 首先在src下的demo_cpp_pkg下的src中新建cpp，然后写代码，这个写的就是节点。
 2. 然后在cpp里导入rclcpp/rclcpp.hpp的库，写代码。
-3. 写完后因为要使用colcon build命令，而colcon build涉及到cmakelist，因此先去cmakelist.txt添加编译的东西![alt text](image-3.png)这里find_pkg找工具包和核心库，然后添加可执行文件，意味着将把那些带cpp文件生成名字为前面的可执行文件，因为生成的这些可执行文件需要跟ros2链接起来(要用ros2的相关功能)，将生成后的可执行文件与rclcpp相链接，链接完之后把这些编译好的程序安装到install下，这个目录是ros2执行时能找到的路径。
-4. 成功后再source install/setup.bash，这步骤是在配置ros2的运行环境，例如将colcon build后的需要的环境变量添加到系统，使得ros2在执行的时候可以找到
-5. 最后 ros2 run 找demo_cpp_pkg 再找节点名字进行运行即可。(有必要去回顾一下前面的关于用cmake生成，再用make的流程，这俩被colcon build合并了) 
+3. 写完后因为要使用colcon build命令，而colcon build涉及到cmakelist，因此先去cmakelist.txt添加编译的东西
+4. ![alt text](assets\README\image-3.png)  
+5. 这里find_pkg找工具包和核心库，然后添加可执行文件，意味着将把那些带cpp文件生成名字为前面的可执行文件，因为生成的这些可执行文件需要跟ros2链接起来(要用ros2的相关功能)，将生成后的可执行文件与rclcpp相链接，链接完之后把这些编译好的程序安装到install下，这个目录是ros2执行时能找到的路径。
+6. 成功后再source install/setup.bash，这步骤是在配置ros2的运行环境，例如将colcon build后的需要的环境变量添加到系统，使得ros2在执行的时候可以找到.
+7. 然后再colcon build 可以写`colcon build -packages-select demo_cpp_pkg` 就只会构建cpp的了，不然cpp和python在一个目录下，都会被生成。
+8. 最后 ros2 run 找demo_cpp_pkg 再找节点名字进行运行即可。(有必要去回顾一下前面的关于用cmake生成，再用make的流程，这俩被colcon build合并了) 
 
 ### 2.5.2 用得到的C++新特性
 
@@ -332,7 +340,7 @@ int main()
     return 0;
 }
 ```
-3. Lambda 主要用来简化回调函数
+3. Lambda 主要用来简化回调函数 需要加入algorithm头文件 其优势主要就在捕获变量不用传参。把外部变量打包带进函数里，让调用者无感知，而且是闭包，变量被打包进函数对象里。 也可以不写lambda表达式的返回值，会根据return自动推导
 ```cpp
 #include <iostream>
 #include <algorithm>
@@ -351,7 +359,7 @@ int main()
 函数分为自由函数 成员函数(定义到类的内部，也叫做实现方法，如果要调用，得用对应的对象，加上.函数名(参数))   和Lambda函数
 
 
-4. 函数包装器 可以统一函数的调用方式
+4. 函数包装器 可以统一函数的调用方式 需要functionnal头文件
 ```cpp
 #include <iostream>
 #include <functional> //函数包装器头文件
@@ -413,7 +421,7 @@ int main()
 1. Python
 
 Python写好后 记得添加到 setup.py里,然后colcon build 再soruce改变环境变量
-![alt text](image-4.png)这里是打开服务器并下载其中内容的方法，类似于爬虫
+![alt text](assets\README\image-4.png)这里是打开服务器并下载其中内容的方法，类似于爬虫
 
 ```python
 import threading
@@ -445,6 +453,9 @@ def main():
     downloader.start_download("http://0.0.0.0:8000/novel2.txt", world_count)
     downloader.start_download("http://0.0.0.0:8000/novel3.txt", world_count)
 ```
+
+2. C++
+
 git clone https://gitee.com/fishros/cpp-httplib.git
 这个是cpp的http库 用法在其readme里
 函数包装器的声明是&，不用写具体变量名，是一种声明
@@ -537,7 +548,7 @@ ros2 node list
 ros2 node info /turtlesim
 ```
 可以看见/turtlesim这个节点里的信息
-![alt text](image-5.png)
+![alt text](assets\README\image-5.png)
 其中  /turtle1/cmd_vel: geometry_msgs/msg/Twist 是话题名称和话题接口 用于控制小海龟的
 
 /turtle1/pose: turtlesim/msg/Pose 是小海龟的实时位置信息
@@ -545,26 +556,26 @@ ros2 node info /turtlesim
 ros2 topic -h
 ```
  可以查看命令帮助 关于topic的
- ![alt text](image-6.png)
+ ![alt text](assets\README\image-6.png)
 ```bash
 ros2 topic echo /turtle1/pose
 ```
 可以输出该话题的内容
 
-![alt text](image-7.png)
+![alt text](assets\README\image-7.png)
 theta是弧度制,是前向角度
 
 ```bash
-rps2 topic info /turtle1/cmd_vel
+ros2 topic info /turtle1/cmd_vel
 ```
 可以查看该话题的接口类型
-![alt text](assets/README/image.png)
+![alt text](assets\README\image-8.png)
 
 ```bash
 ros2 interface show /xxx
 ```
 可以查看消息接口的详细信息,/xxx即是消息接口的名字
-![alt text](assets/README/image-1.png)
+![alt text](assets\README\image-9.png)
 
 ros2的坐标系是右手坐标系,x轴朝上,y轴朝左 z朝屏幕向外  (二维平面下)
 
@@ -629,9 +640,9 @@ interface:接口的意思
     Apache-2.0 是 ROS 2 默认许可证
     不影响功能，只是代码规范
 
-创建完功能包后,在工作空间进行colcon build,完毕后就可以在/src/demo_python_topic里写代码了
+创建完功能包后,在工作空间进行colcon build,完毕后如果没问题就可以在/src/demo_python_topic里写代码了
 
-代码写完,记住先去setup.py里添加路径,然后source环境变量,再ros2 run 找相应的节点运行.
+代码写完,记住先去setup.py里添加路径,然后source环境变量,colcon build 再ros2 run 找相应的节点运行.
 
 ```python
 import rclpy
@@ -676,16 +687,16 @@ def main():
     node.destroy_node()
     rclpy.shutdown()
 ```
-打开服务器的命令:python3 -m http.server
-可以拆分终端,输入ros2 topic list -v 查看当前话题是否有我们注册的
-也可以使用 ros2 topic echo /novel 查看实时话题内容
+打开服务器的命令:python3 -m http.server  
+可以拆分终端,输入ros2 topic list -v 查看当前话题是否有我们注册的  
+也可以使用 ros2 topic echo /novel 查看实时话题内容  
 还有 ros2 topic hz /novel 来查看当前发送频率(我们这里是5s发送一次)
 
 ### 3.2.2 订阅小说并合成语音
 需要安装:
 sudo apt install python3-pip -y 安装包管理工具 
-pip3 install espeakng  这是python的一个包
-sudo apt install espeak-ng 安装这个
+pip3 install espeakng  这是espeakng的python库
+sudo apt install espeak-ng 安装这个 这个是语音合成引擎
 都安装好
 ```python
 import espeakng
@@ -730,4 +741,9 @@ def main():
 写完代码之后 去setup.py 添加路径 然后colcon build 
 source 改变环境变量
 再ros2 run 即可
+
+---
+# 3.3 C++话题订阅与发布
+
+## 3.3.1 发布速度控制小海龟画圆
 
