@@ -810,4 +810,96 @@ int main(int argc, char * argv[])
 
 `publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("turtle1/cmd_vel", 10); // 创建发布者，发布到/turtle1/cmd_vel话题，队列大小为10`这里是真的创建了一个发布者对象,使用create_publisher<>()函数,<>里填入要实例化的对象的类,然后将这个对象的智能指针返回出来,给publisher_   
 `create_wall_timer`这个函数是父类里的成员函数,但其参数需要用到chrono里的东西,所以需要引入chrono的头文件  
-auto message那句等同于`geometry_msgs::msg::Twist message;`  
+auto message那句等同于`geometry_msgs::msg::Twist message;`    
+## 3.3.2 订阅pose实现闭环控制  
+`ros2 interface show 接口名称` 可以看见接口的定义 
+```cpp
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <chrono>
+#include <turtlesim/msg/pose.hpp>
+
+
+using namespace std::chrono_literals;
+
+class TurtleControlNode : public rclcpp::Node
+{
+private:
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_; // 发布者的智能指针
+    rclcpp::Subscription<turtlesim::msg::Pose>::SharedPtr subscriber_; // 订阅者的智能指针
+    double target_x_ = 1.0; // 目标位置的x坐标
+    double target_y_ = 1.0; // 目标位置的y坐标
+    double k_ = 1.0; // 控制增益
+    double max_speed_ = 3.0; // 最大速度
+public:
+    explicit TurtleControlNode(const std::string &node_name) : Node(node_name)
+    {
+        publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("turtle1/cmd_vel", 10); // 创建发布者，发布到/turtle1/cmd_vel话题，队列大小为10
+        subscriber_ = this->create_subscription<turtlesim::msg::Pose>(
+            "turtle1/pose", 10, std::bind(&TurtleControlNode::on_pose_received, this, std::placeholders::_1));
+    }
+
+    void on_pose_received(const turtlesim::msg::Pose::SharedPtr pose) //收到数据的共享指针
+    {
+        auto current_x = pose->x; // 获取当前x坐标
+        auto current_y = pose->y; // 获取当前y坐标
+        RCLCPP_INFO(this->get_logger(), "Received pose: x=%.2f, y=%.2f", current_x, current_y); // 打印当前坐标
+
+        // 计算误差
+        auto distance = std::sqrt(std::pow(target_x_ - current_x, 2) + std::pow(target_y_ - current_y, 2)); // 计算与目标位置的距离
+        auto angle_to_target = std::atan2(target_y_ - current_y, target_x_ - current_x); // 计算指向目标位置的角度
+        auto angle_error = angle_to_target - pose->theta; // 计算角度误差
+
+        auto message = geometry_msgs::msg::Twist(); // 创建一个Twist消息对象
+        if (distance > 0.1)
+        {
+            if(fabs(angle_error) > 0.2)
+            {
+                message.angular.z = fabs(angle_error);
+            }
+            else
+            {
+                message.linear.x = k_ * distance;
+            }
+        }
+
+        // 限制最大速度
+        if (message.linear.x > max_speed_)
+        {
+            message.linear.x = max_speed_;
+        }
+        if (message.angular.z > max_speed_)
+        {
+            message.angular.z = max_speed_; 
+        }
+        publisher_->publish(message); // 发布消息
+
+
+    }
+};
+
+int main(int argc, char * argv[])
+{
+    rclcpp::init(argc, argv); // 初始化ROS 2
+    auto node = std::make_shared<TurtleControlNode>("turtle_control_node"); // 创建节点实例
+    rclcpp::spin(node); // 进入循环，等待回调函数被调用
+    rclcpp::shutdown(); // 关闭ROS 2
+    return 0;
+}
+```
+
+话题类型和话题接口都必须有,因为话题接口有可能是一样的含义,可以复用,(即结构体内的参数定义是一样的),例如无人机位置的xyz和云台角度的xyz,会混,但是订阅话题名称加上话题接口就不会错了.  
+atan2(target_y - current_y , target_x - current_x) 可以求出目标点相对于乌龟的角度 这个值最终是由弧度制表示出来的,因此,假设目标点为1,1 初始点为5,5,求出来的在第三象限,-135度,即-2.356rad.对于theta来说,经测试,范围也是由弧度制表示的,为0到pi到-pi到0,因此在代码里,最开始angle_error是负数减去正数,会越来越大,然后再突然调变到-3.14,此时为误差为正数,最后慢慢逼近到误差绝对值为0.2左右.  
+ 
+
+# 3.4 话题通信最佳实践
+## 3.4.1 自定义通信接口  
+在chapt3中新建一个工作空间,进入该工作空间,新建src文件夹,然后进入src,并创建功能包.python是没有办法定义接口的,只能用cpp的功能包, 使用`ros2 pkg create status_interfaces --dependencies builtin_interfaces rosidl_default_generators --license Apache-2.0`,这个Builtin会给我们提供时间戳,就在这个消息接口里面.而rosidl这个可以帮助我们把自定义的消息文件转换成cpp和python的源码.  
+然后在status_interfaces下创建msg文件夹,这个名字必须是这个,是规定好了,再在msg里使用驼峰命名法,首字母一定大写,创建一个话题接口,以msg结尾.  
+在msg里添加builtin_interfaces/Time stamp,但实际上当我们使用ros2 interface show | grep Time 的时候,会发现其接口名字为builtin_interfaces/msg/Time,我们需要把msg这个去掉再引用,这是ros的格式规定  
+写完msg后,再在cmakelist里配置一下,再构建就可以转换了,配置如图![alt text](assets/README/image-10.png)   
+例如rosidl这个package就是ros官方的,其提供了rosidl_generate_interfaces这个cmake指令(函数),这个里面要填消息接口的相对路径.    
+cmakelist配置完后,再进入xml里添加命令,告诉ros,当前功能包是包含消息接口的功能包,`<member_of_group>rosidl_interface_packages</member_of_group>`,配置当前功能包属于什么组里   
+全部做完之后,就可以colcon build了,记得回到ws工作空间里build  
+## 3.4.2 系统信息获取与发布 Python
+
