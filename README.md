@@ -1036,4 +1036,23 @@ label_ → 它是类成员变量
 get_qstr_from_msg() → 它是类成员函数  
 访问类成员 → 必须通过 this 指针。  
 lambda只会捕获我们用到的变量  
-编译器的工作流程非常简单：看到你写了 [&] 或 [=]  进入 Lambda 内部，逐行扫描代码.发现你使用了外部的变量或者成员,就捕获了.  
+编译器的工作流程非常简单：看到你写了 [&] 或 [=]  进入 Lambda 内部，逐行扫描代码.发现你使用了外部的变量或者成员,就捕获了.    
+另外,也可以QString返回引用或者指针,不过qt已经做好了所谓的隐式共享,所以无所谓.
+# 3.5 Git的使用 
+
+```bash
+
+git config --global user.name "Qss" 
+git config --global user.email "xxx" 可以在github上显示头像啥的,得配置正确,错的也行,无所谓
+git config --global init.defaultBranch master
+
+git config -l
+
+
+git add src/xxx
+git add src
+git add .
+git reset
+git commit -m "xxx"   --message
+
+.gitignore 里使用通配符 *.xxx 可以忽略后缀为xxx的文件
