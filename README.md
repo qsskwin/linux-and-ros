@@ -1214,3 +1214,182 @@ def main():
     node.destroy_node()
     rclpy.shutdown()
 ```
+# 4.3 C++服务通信,做一个巡逻海龟
+
+## 4.3.1 自定义服务接口 
+大致流程:在上几节中,我们创建了chapt4_interfaces的功能包,因此直接在这个功能包下,进入srv下,驼峰命名开头,定义我们的Patrol.srv即可,然后在该文件中写入我们的变量,上部分是请求,下部分是返回,中间用`---`隔开.填写完毕后进入cmakelist 在rosidl中填写路径,`idl = Interface Definition Language`接口定义语言.然后colcon build即可,srv类似这种写法.
+```
+float32 target_x
+float32 target_y
+---
+int8 SUCCESS = 1
+int8 FAIL = 0
+int8 result #结果 二者取其一 
+```
+写完之后,可以使用`srouce 然后 ros2 interface show chapt4_interfaces/srv/Patrol`查看该接口的详细值.
+## 4.3.2 服务端代码的实现
+
+```cpp
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/twist.hpp> //需要给小海龟发送信息
+#include <chrono> //时间变化
+#include <turtlesim/msg/pose.hpp> //小海龟发送来的信息
+#include <chapt4_interfaces/srv/patrol.hpp> // 自定义接口
+
+using Patrol = chapt4_interfaces::srv::Patrol;
+using namespace std::chrono_literals;
+
+class TurtleControlNode : public rclcpp::Node
+{
+private:
+    rclcpp::Service<Patrol>::SharedPtr patrol_service_; // 服务端的智能指针
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_; // 发布者的智能指针
+    rclcpp::Subscription<turtlesim::msg::Pose>::SharedPtr subscriber_; // 订阅者的智能指针
+    double target_x_ = 1.0; // 目标位置的x坐标
+    double target_y_ = 1.0; // 目标位置的y坐标
+    double k_ = 1.0; // 控制增益
+    double max_speed_ = 3.0; // 最大速度
+public:
+    explicit TurtleControlNode(const std::string &node_name) : Node(node_name)
+    { // 这里一个有const 一个没有const  请注意
+        patrol_service_ = this->create_service<Patrol>("patrol",
+            [&](const std::shared_ptr<Patrol::Request> request, std::shared_ptr<Patrol::Response> response) 
+        {
+            if(0 < request->target_x && request->target_x < 11 && 0 < request->target_y && request->target_y < 11)
+            {
+                this->target_x_ = request->target_x; // 从请求中获取目标位置的x坐标
+                this->target_y_ = request->target_y; // 从请求中获取目标位置的y坐标
+                response->result = Patrol::Response::SUCCESS; // 设置响应结果为成功
+            }
+            else
+            {
+                response->result = Patrol::Response::FAIL; // 设置响应结果为失败; // 打印警告日志
+                return;
+            }
+        }
+    );
+        publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("turtle1/cmd_vel", 10); // 创建发布者，发布到/turtle1/cmd_vel话题，队列大小为10
+        subscriber_ = this->create_subscription<turtlesim::msg::Pose>(
+            "turtle1/pose", 10, std::bind(&TurtleControlNode::on_pose_received, this, std::placeholders::_1));
+    }
+
+    void on_pose_received(const turtlesim::msg::Pose::SharedPtr pose) //收到数据的共享指针
+    {
+        auto current_x = pose->x; // 获取当前x坐标
+        auto current_y = pose->y; // 获取当前y坐标
+        
+        // 计算误差
+        auto distance = std::sqrt(std::pow(target_x_ - current_x, 2) + std::pow(target_y_ - current_y, 2)); // 计算与目标位置的距离
+        auto angle_to_target = std::atan2(target_y_ - current_y, target_x_ - current_x); // 计算指向目标位置的角度
+        auto angle_error = angle_to_target - pose->theta; // 计算角度误差
+        RCLCPP_INFO(this->get_logger(), "x=%.2f, y=%.2f , theta=%.2f, linear=%.2f, angle_error=%.2f", current_x, current_y, pose->theta, pose->linear_velocity, angle_error); // 打印当前坐标
+        auto message = geometry_msgs::msg::Twist(); // 创建一个Twist消息对象
+        if (distance > 0.1)
+        {
+            if(fabs(angle_error) > 0.2)
+            {
+                message.angular.z = fabs(angle_error);
+            }
+            else
+            {
+                message.linear.x = k_ * distance;
+            }
+        }
+
+        // 限制最大速度
+        if (message.linear.x > max_speed_)
+        {
+            message.linear.x = max_speed_;
+        }
+        if (message.angular.z > max_speed_)
+        {
+            message.angular.z = max_speed_; 
+        }
+        publisher_->publish(message); // 发布消息
+
+
+    }
+};
+
+int main(int argc, char * argv[])
+{
+    rclcpp::init(argc, argv); // 初始化ROS 2
+    auto node = std::make_shared<TurtleControlNode>("turtle_control_node"); // 创建节点实例
+    rclcpp::spin(node); // 进入循环，等待回调函数被调用
+    rclcpp::shutdown(); // 关闭ROS 2
+    return 0;
+}
+```
+## 4.3.3 客户端代码的实现
+
+```cpp
+#include <rclcpp/rclcpp.hpp>
+#include <chrono>
+#include <chapt4_interfaces/srv/patrol.hpp>
+#include <ctime> //产生随机数
+//客户端
+using Patrol = chapt4_interfaces::srv::Patrol;
+using namespace std::chrono_literals;
+
+class PatrolClientNode : public rclcpp::Node
+{
+private:
+    rclcpp::TimerBase::SharedPtr timer_;              // 定时器的智能指针
+    rclcpp::Client<Patrol>::SharedPtr patrol_client_; // 客户端的智能指针
+public:
+    explicit PatrolClientNode(const std::string &node_name) : Node(node_name)
+    {
+        srand(time(NULL));                                      // 设置随机数种子
+        patrol_client_ = this->create_client<Patrol>("patrol"); // 创建客户端，连接到名为"patrol"的服务
+        timer_ = this->create_wall_timer(10s, [&]() -> void
+                                         {
+            // 检测服务器是否上线
+            while(! this -> patrol_client_ -> wait_for_service(1s))
+            {
+                if(rclcpp::ok())
+                {
+                    RCLCPP_INFO(this->get_logger(), "等待服务上线...");
+                }
+                else
+                {
+                    RCLCPP_ERROR(this->get_logger(), "程序被中断，退出...");
+                    return;
+                }
+
+            }
+            //构造请求对象
+            auto request = std::make_shared<Patrol::Request>();
+            request->target_x = rand() % 15; // 生成1到10之间的随机整数作为目标位置的x坐标
+            request->target_y = rand() % 15; // 生成1到10之间的随机整数作为目标位置的y坐标
+            RCLCPP_INFO(this->get_logger(), "发送请求: target_x=%.2f, target_y=%.2f", request->target_x, request->target_y); // 打印发送的请求
+            this -> patrol_client_->async_send_request(request,
+            [&](rclcpp::Client<Patrol>::SharedFuture result_future) -> void
+            {// 获取响应  在这里,只有当future有值的时候才会运行,并且不会卡,这就是为什么要使用future,为什么使用async_send_request的原因
+                auto response = result_future.get(); 
+                if(response->result == Patrol::Response::SUCCESS)
+                {
+                    RCLCPP_INFO(this->get_logger(), "巡逻请求成功!"); // 打印成功日志
+                }
+                else
+                {
+                    RCLCPP_WARN(this->get_logger(), "巡逻请求失败!"); // 打印失败日志
+                }
+            }
+            );
+
+        });
+    }
+};
+
+int main(int argc, char *argv[])
+{
+    rclcpp::init(argc, argv);                                        // 初始化ROS 2
+    auto node = std::make_shared<PatrolClientNode>("patrol_client"); // 创建节点实例
+    rclcpp::spin(node);                                              // 进入循环，等待回调函数被调用
+    rclcpp::shutdown();                                              // 关闭ROS 2
+    return 0;
+}
+```
+
+response不需要创建对象,可以在回调函数里直接定义,返回.    
+对于服务来说,service必须要使用智能指针传递和管理,因为服务通信是请求-响应模式,数据需要跨线程,异步传递,服务请求可能会在后台线程排队很久,普通对象会被销毁,但智能指针可以保证其一直存活,因此需要智能指针.这也是ros的硬性规则.而对于话题来说,则没有这种要求,话题是数据流广播,发出去就不管了,发布速度快,也不需要长时间保存,发的时候会自动copy一份数据进行发送.但其实也可以写成智能指针的版本.
