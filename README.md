@@ -1218,7 +1218,7 @@ def main():
 
 ## 4.3.1 自定义服务接口 
 大致流程:在上几节中,我们创建了chapt4_interfaces的功能包,因此直接在这个功能包下,进入srv下,驼峰命名开头,定义我们的Patrol.srv即可,然后在该文件中写入我们的变量,上部分是请求,下部分是返回,中间用`---`隔开.填写完毕后进入cmakelist 在rosidl中填写路径,`idl = Interface Definition Language`接口定义语言.然后colcon build即可,srv类似这种写法.
-```
+``` 
 float32 target_x
 float32 target_y
 ---
@@ -1469,7 +1469,7 @@ def main():
     rclpy.shutdown()
 ```
 流程:在命令行中输入ros2 param set ,ros2会把我们的内容打包成一个列表`parameters = [ Parameter(name='number_of_times_to_upsample', value=2)]`,然后传给我们的回调函数.改完后,由于是基于服务的,得返回一个结果`return SetParametersResult(successful=True) `,这是ros2参数系统的固定接口规则,需要加入`from rcl_interfaces.msg import SetParametersResult`这个头文件.   
-## 4.4.3 客户端和客户端代码的修改与实现
+## 4.4.3 客户端和服务端代码的修改与实现
 
 使用ros2 interface show rcl_interfaces/srv/SetParameters 显示的服务接口类型的详细信息,这里可以看见就一个类型:是Parameter类型的数组,名叫parameters,该类型由string类型的name和ParameterValue类型的value构成,而ParameterValue类型又由下面的构成,因此要引入from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 和from rcl_interfaces.srv import SetParameters
@@ -1656,5 +1656,279 @@ def main():
 ```
 # 4.5 在C++节点中使用参数
 ## 4.5.1 参数的声明与设置
+在下一节里,跟python一样,就是一些declare_parameter函数的应用   
+## 4.5.2 服务端代码
+```cpp
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <chrono>
+#include <turtlesim/msg/pose.hpp>
+#include <chapt4_interfaces/srv/patrol.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
+//服务端
+using Patrol = chapt4_interfaces::srv::Patrol;
+using SetParametersResult = rcl_interfaces::msg::SetParametersResult;
+using namespace std::chrono_literals;
+
+class TurtleControlNode : public rclcpp::Node
+{
+private:
+    OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_; // 参数回调函数的智能指针
+    rclcpp::Service<Patrol>::SharedPtr patrol_service_; // 服务端的智能指针
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_; // 发布者的智能指针
+    rclcpp::Subscription<turtlesim::msg::Pose>::SharedPtr subscriber_; // 订阅者的智能指针
+    double target_x_ = 1.0; // 目标位置的x坐标
+    double target_y_ = 1.0; // 目标位置的y坐标
+    double k_ = 1.0; // 控制增益
+    double max_speed_ = 3.0; // 最大速度
+public:
+    explicit TurtleControlNode(const std::string &node_name) : Node(node_name)
+    { 
+        this->declare_parameter("k", 1.0); // 声明参数k，默认值为1.0
+        this->declare_parameter("max_speed", 3.0); // 声明参数max_speed，默认值为3.0
+        this->get_parameter("k", k_); // 获取参数k的值
+        this->get_parameter("max_speed", max_speed_); // 获取参数max_speed的值 这里是传引用
+        this->set_parameter(rclcpp::Parameter("k", 1.0)); // 设置参数k的值
+        this->set_parameter(rclcpp::Parameter("max_speed", 3.0)); // 设置参数max_speed的值
+        parameter_callback_handle_ = this -> add_on_set_parameters_callback
+        (
+            [&](const std::vector<rclcpp::Parameter> & parameters) -> SetParametersResult
+            {
+                SetParametersResult result; // 创建一个SetParametersResult对象
+                result.successful = true; // 默认设置为成功
+                for (const auto & parameter : parameters) // 遍历所有参数
+                {
+                    RCLCPP_INFO(this->get_logger(), "Parameter %s is being set to %s", parameter.get_name().c_str(), parameter.value_to_string().c_str()); // 打印正在设置的参数信息
+                    if (parameter.get_name() == "k") // 如果参数名是"k"
+                    {
+                        k_ = parameter.as_double(); // 将参数值转换为double并赋值给k_
+                    }
+                    else if (parameter.get_name() == "max_speed") // 如果参数名是"max_speed"
+                    {
+                        max_speed_ = parameter.as_double(); // 将参数值转换为double并赋值给max_speed_
+                    }
+                    else
+                    {
+                        result.successful = false; // 如果有未知参数，设置结果为失败
+                        result.reason = "Unknown parameter: " + parameter.get_name(); // 设置失败原因
+                        RCLCPP_WARN(this->get_logger(), "Unknown parameter: %s", parameter.get_name().c_str()); // 打印警告日志
+                    }
+                }
+                return result; // 返回结果
+            }
+        );
+        // 这里一个有const 一个没有const  请注意
+        patrol_service_ = this->create_service<Patrol>("patrol",
+            [&](const std::shared_ptr<Patrol::Request> request, std::shared_ptr<Patrol::Response> response) 
+        {
+            if(0 < request->target_x && request->target_x < 11 && 0 < request->target_y && request->target_y < 11)
+            {
+                this->target_x_ = request->target_x; // 从请求中获取目标位置的x坐标
+                this->target_y_ = request->target_y; // 从请求中获取目标位置的y坐标
+                response->result = Patrol::Response::SUCCESS; // 设置响应结果为成功
+            }
+            else
+            {
+                response->result = Patrol::Response::FAIL; // 设置响应结果为失败; // 打印警告日志
+                return;
+            }
+        }
+    );
+        publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("turtle1/cmd_vel", 10); // 创建发布者，发布到/turtle1/cmd_vel话题，队列大小为10
+        subscriber_ = this->create_subscription<turtlesim::msg::Pose>(
+            "turtle1/pose", 10, std::bind(&TurtleControlNode::on_pose_received, this, std::placeholders::_1));
+    }
+
+    void on_pose_received(const turtlesim::msg::Pose::SharedPtr pose) //收到数据的共享指针
+    {
+        auto current_x = pose->x; // 获取当前x坐标
+        auto current_y = pose->y; // 获取当前y坐标
+        
+        // 计算误差
+        auto distance = std::sqrt(std::pow(target_x_ - current_x, 2) + std::pow(target_y_ - current_y, 2)); // 计算与目标位置的距离
+        auto angle_to_target = std::atan2(target_y_ - current_y, target_x_ - current_x); // 计算指向目标位置的角度
+        auto angle_error = angle_to_target - pose->theta; // 计算角度误差
+        RCLCPP_INFO(this->get_logger(), "x=%.2f, y=%.2f , theta=%.2f, linear=%.2f, angle_error=%.2f", current_x, current_y, pose->theta, pose->linear_velocity, angle_error); // 打印当前坐标
+        auto message = geometry_msgs::msg::Twist(); // 创建一个Twist消息对象
+        if (distance > 0.1)
+        {
+            if(fabs(angle_error) > 0.2)
+            {
+                message.angular.z = fabs(angle_error);
+            }
+            else
+            {
+                message.linear.x = k_ * distance;
+            }
+        }
+
+        // 限制最大速度
+        if (message.linear.x > max_speed_)
+        {
+            message.linear.x = max_speed_;
+        }
+        if (message.angular.z > max_speed_)
+        {
+            message.angular.z = max_speed_; 
+        }
+        publisher_->publish(message); // 发布消息
+
+
+    }
+};
+
+int main(int argc, char * argv[])
+{
+    rclcpp::init(argc, argv); // 初始化ROS 2
+    auto node = std::make_shared<TurtleControlNode>("turtle_control_node"); // 创建节点实例
+    rclcpp::spin(node); // 进入循环，等待回调函数被调用
+    rclcpp::shutdown(); // 关闭ROS 2
+    return 0;
+}
+```
+## 4.5.3 客户端代码
+
+```cpp
+#include <rclcpp/rclcpp.hpp>
+#include <chrono>
+#include <chapt4_interfaces/srv/patrol.hpp>
+#include <ctime> //产生随机数
+#include <rcl_interfaces/msg/parameter.hpp>
+#include <rcl_interfaces/msg/parameter_value.hpp>
+#include <rcl_interfaces/msg/parameter_type.hpp>
+#include <rcl_interfaces/srv/set_parameters.hpp>
+//客户端
+
+
+using SetP = rcl_interfaces::srv::SetParameters;
+using Patrol = chapt4_interfaces::srv::Patrol;
+using namespace std::chrono_literals;
+
+class PatrolClientNode : public rclcpp::Node
+{
+private:
+    rclcpp::TimerBase::SharedPtr timer_;              // 定时器的智能指针
+    rclcpp::Client<Patrol>::SharedPtr patrol_client_; // 客户端的智能指针
+public:
+    explicit PatrolClientNode(const std::string &node_name) : Node(node_name)
+    {
+        srand(time(NULL));                                      // 设置随机数种子
+        patrol_client_ = this->create_client<Patrol>("patrol"); // 创建客户端，连接到名为"patrol"的服务
+        timer_ = this->create_wall_timer(10s, [&]() -> void
+                                         {
+            // 检测服务器是否上线
+            while(! this -> patrol_client_ -> wait_for_service(1s))
+            {
+                if(!rclcpp::ok())
+                {
+                    RCLCPP_INFO(this->get_logger(), "等待服务上线...");
+                }
+                else
+                {
+                    RCLCPP_ERROR(this->get_logger(), "程序被中断，退出...");
+                    return;
+                }
+
+            }
+            //构造请求对象
+            auto request = std::make_shared<Patrol::Request>();
+            request->target_x = rand() % 15; // 生成1到10之间的随机整数作为目标位置的x坐标
+            request->target_y = rand() % 15; // 生成1到10之间的随机整数作为目标位置的y坐标
+            RCLCPP_INFO(this->get_logger(), "发送请求: target_x=%.2f, target_y=%.2f", request->target_x, request->target_y); // 打印发送的请求
+            this -> patrol_client_->async_send_request
+            (request,
+            [&](rclcpp::Client<Patrol>::SharedFuture result_future) -> void
+                {// 获取响应  在这里,只有当future有值的时候才会运行,并且不会卡,这就是为什么要使用future,为什么使用async_send_request的原因
+                    auto response = result_future.get(); 
+                    if(response->result == Patrol::Response::SUCCESS)
+                    {
+                        RCLCPP_INFO(this->get_logger(), "巡逻请求成功!"); // 打印成功日志
+                    }
+                    else
+                    {
+                        RCLCPP_WARN(this->get_logger(), "巡逻请求失败!"); // 打印失败日志
+                    }
+                }
+            );
+
+        });
+    }
+
+    SetP::Response::SharedPtr call_set_parameter(const rcl_interfaces::msg::Parameter &param)
+    {
+            auto param_client = this->create_client<SetP>("/turtle_control_node/set_parameters"); // 创建客户端，连接到服务
+            // 检测服务器是否上线
+            while(!param_client -> wait_for_service(1s))
+            {
+                if(!rclcpp::ok())
+                {
+                    RCLCPP_INFO(this->get_logger(), "等待服务上线...");
+                }
+                else
+                {
+                    RCLCPP_ERROR(this->get_logger(), "程序被中断，退出...");
+                    return nullptr;
+                }
+
+            }
+            //构造请求对象
+            auto request = std::make_shared<SetP::Request>();
+            request->parameters.push_back(param); // 将参数添加到请求中
+            auto future = param_client->async_send_request(request); // 发送请求并获取未来对象 这个函数是重载函数,要么自己添加回调函数,要么返回future对象,让调用者自己处理响应
+            spin_until_future_complete(this->get_node_base_interface(), future); // 等待响应完成 
+            auto response = future.get(); // 获取响应
+            return response; // 返回响应
+        };
+    
+    
+
+    //更新参数k
+
+    void update_server_param_k(double k)
+    {
+        // 创建参数对象
+        auto param = rcl_interfaces::msg::Parameter();
+        param.name = "k"; // 参数名称
+        param.value.type = rcl_interfaces::msg::ParameterType::PARAMETER_DOUBLE; //
+        param.value.double_value = k; // 设置参数值
+        auto response = call_set_parameter(param); // 调用函数设置参数
+        if (response == NULL) // 检查响应结果
+        {
+            RCLCPP_INFO(this->get_logger(), "参数k更新失败!"); // 打印成功日志
+            return;
+        }
+        else
+        {
+            for(auto result : response->results) // 遍历响应结果
+            {
+                if(result.successful)
+                {
+                    RCLCPP_INFO(this->get_logger(), "参数k更新成功!"); // 打印成功日志
+                }
+                else
+                {
+                    RCLCPP_WARN(this->get_logger(), "参数k更新失败!,原因:%s", result.reason.c_str()); // 打印失败日志
+                }
+            }
+        }
+        
+    }
+
+ //创建客户端发送请求,返回结果
+
+};
+
+int main(int argc, char *argv[])
+{
+    rclcpp::init(argc, argv);                                        // 初始化ROS 2
+    auto node = std::make_shared<PatrolClientNode>("patrol_client"); // 创建节点实例
+    node -> update_server_param_k(2.0);                              // 更新参数k的值为2.0
+    rclcpp::spin(node);                                              // 进入循环，等待回调函数被调用
+    rclcpp::shutdown();                                              // 关闭ROS 2
+    return 0;
+}
+```
+
+
 
 
