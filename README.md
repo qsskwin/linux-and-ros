@@ -2375,5 +2375,10 @@ int main(int argc, char * argv[])
     return 0;
 }
 ```
-
-
+# 5.4 常用可视化工具rqt与RViz
+## 5.4.1 GUI框架rqt
+`sudo apt install ros-humble-rqt-tf-tree -y` 安装tf-tree 然后`rm -rf ~/.config/ros.org/rqt_gui.ini`,这个是原始配置文件,删掉后rqt会生成新的,就会把tf-tree重新加载进去    
+## 5.4.2 数据可视化工具RViz
+`rviz2 -d ../rviz_tf.rviz`可以运行自己保存的配置文件   
+# 5.5 数据记录工具ros2 bag
+使用`ros2 bag record /turtle1/cmd_vel` 即某一个话题的名字,就可以记录某一个话题的数据.输入 ls ros*,可以看见两个文件,即数据文件.使用cat rosbag2_.xxxxxx.metadata.yaml 可以查看里面的数据,使用`ros2 bag play rosbag2xxx`可以重新播放该数据 按table补全 ros2 bag -h可以查看相关命令
