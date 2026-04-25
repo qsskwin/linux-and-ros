@@ -2058,4 +2058,322 @@ def generate_launch_description():
     ])
 
 ```
+# 第五章 工具
+
+# 5.1 坐标变换工具介绍
+坐标变换工具是ros官方给的 TF,Transform 转换    
+## 5.1.1 通过命令行使用TF  
+`ros2 run tf2_ros static_transform_publisher --x 0.1 --y 0.0 --z 0.2 --roll 0.0 --pitch 0.0 --yaw 0.0 --frame-id base_link --child-frame-id base_lazer`  
+指定子类父类坐标系命令,即base_lazer 在 base_link的X方向偏移了0.1m y无偏移,z方向抬高了0.2m,没有旋转,父类是base_link 子类是base_lazer.   
+也就是说激光雷达（base_lazer）装在机器人底座（base_link）前方 0.1m、上方 0.2m 处，没有旋转。   
+`ros2 run tf2_ros static_transform_publisher --x 0.3 --y 0.0 --z 0.0 --roll 0.0 --pitch 0.0 --yaw 0.0 --frame-id base_lazer --child-frame-id wall_point`
+指定子类父类坐标系命令 这两个命令的子类父类是不一样的    
+墙壁点（wall_point）在激光雷达（base_lazer）正前方 0.3 米处。
+`ros2 run tf2_ros tf2_echo base_link wall_point`      
+让 TF2 系统自动计算并输出：从 base_link 到 wall_point 的总坐标变换     
+`sudo apt install mrpt-apps -y`可视化工具,然后输入`3d-rotation-converter`即可打开   
+`ros2 run tf2_tools view_frames`可以可视化相关转换关系
+## 5.1.2 TF原理的简单探究   
+`ros2 topic list`可以查看当前话题,因为有tf2,因此会出现一个/tf_static的话题,然后`ros2 topic info /tf_static`,就可以看见当前话题的接口类型,发布者数量,订阅者数量等.再输入`ros2 interface tf2_msgs/msg/TFMessage`可以查看该话题接口类型,使用`ros2 topic echo /tf_static`可以输出该话题下的内容    
+当我们相对查询两个关系之间的坐标变换的时候,首先会建立一个缓冲区,其会订阅该话题,然后把话题内容记录.通过缓冲区的询问相对关系的时候,其会执行一系列坐标变换的计算,然后把结果返回.     
+除了静态话题还有动态话题.就是tf话题,主要用在机器人的动态关节,比如机器人的轮子相对于机器人的本体,其会一直动态更新话题,需要不断地发布.对于固定的组件来说,就用tf_static    
+对于TF的话题来说,静态TF发送后就会在缓存里可以一直存在,动态TF则是发送后,在一段时间内有效,超过这个时间后就会判定为过期不能用了.和普通话题相比,就是普通话题不会过期,动态TF会过期.
+# 5.2 Python TF之手眼坐标变换  
+## 5.2.1 通过Python发送静态TF 
+静态TF和动态TF发布,一般是配合使用的    
+`sudo apt install ros-$ROS_DISTRO-tf-transformations    sudo pip3 install transforms3d`     
+这两个命令安装后,可以让我们使用python中的库来进行tf坐标变换,在新的章节中,创建新文件夹和src,使用   
+`ros2 pkg create demo_python_tf --build-type ament_python --dependencies rclpy geometry_msgs tf_ros tf_transformations --license Apache-2.0`创建功能包,然后在demo_python_tf的功能包下新建文件,编写代码,写完后在setup.py中添加,然后colconbuild再运行该节点即可.我们可以使用`ros2 topic echo /tf_static`查看当前话题内容,使用`ros2 run tf2_ros tf2_echo base_link camera_link`来查看坐标变换情况   
+```python
+import rclpy
+from rclpy.node import Node
+from tf2_ros import StaticTransformBroadcaster  #静态坐标发布器
+from geometry_msgs.msg import TransformStamped #消息接口
+from tf_transformations import quaternion_from_euler #欧拉角转四元数
+import math #角度转弧度
+
+class StaticTFBroadcaster(Node):
+    def __init__(self):
+        super().__init__('static_tf_broadcaster')
+        self.static_broadcaster = StaticTransformBroadcaster(self) #创建静态坐标发布器
+        self.publish_static_tf() #发布静态坐标
+    def publish_static_tf(self):
+        """发布静态TF,从base_link到camera_link"""
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg() #时间戳
+        transform.header.frame_id = 'base_link' #父坐标系
+        transform.child_frame_id = 'camera_link' #子坐标系
+        transform.transform.translation.x = 0.5 #平移
+        transform.transform.translation.y = 0.3
+        transform.transform.translation.z = 0.6
+        #旋转，欧拉角转四元数
+        yaw = 0.0
+        pitch = 0.0
+        roll = math.radians(180) #将角度转为弧度
+        q = quaternion_from_euler(roll, pitch, yaw)
+        transform.transform.rotation.x = q[0]
+        transform.transform.rotation.y = q[1]
+        transform.transform.rotation.z = q[2]
+        transform.transform.rotation.w = q[3]
+        self.static_broadcaster.sendTransform(transform) #发布TF
+        self.get_logger().info(f'Published static transform from base_link to camera_link,{transform}')
+
+def main():
+    rclpy.init()
+    node = StaticTFBroadcaster()
+    rclpy.spin(node)
+    rclpy.shutdown()
+```
+## 5.2.2 通过Python发布动态TF
+```python
+import rclpy
+from rclpy.node import Node
+from tf2_ros import TransformBroadcaster  #动态坐标发布器
+from geometry_msgs.msg import TransformStamped #消息接口
+from tf_transformations import quaternion_from_euler #欧拉角转四元数
+import math #角度转弧度
+
+class DynamicTFBroadcaster(Node):
+    def __init__(self):
+        super().__init__('dynamic_tf_broadcaster')
+        self.dynamic_broadcaster = TransformBroadcaster(self) #创建动态坐标发布器
+        self.timer = self.create_timer(0.01, self.publish_dynamic_tf) #每隔0.01秒发布一次动态坐标
+    def publish_dynamic_tf(self):
+        """发布动态TF,camera_link到bottle_link"""
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg() #时间戳
+        transform.header.frame_id = 'camera_link' #父坐标系
+        transform.child_frame_id = 'bottle_link' #子坐标系
+        transform.transform.translation.x = 0.2 #平移
+        transform.transform.translation.y = 0.3
+        transform.transform.translation.z = 0.5
+        #旋转，欧拉角转四元数
+        yaw = 0.0
+        pitch = 0.0
+        roll = 0.0
+        q = quaternion_from_euler(roll, pitch, yaw)
+        transform.transform.rotation.x = q[0]
+        transform.transform.rotation.y = q[1]
+        transform.transform.rotation.z = q[2]
+        transform.transform.rotation.w = q[3]
+        self.dynamic_broadcaster.sendTransform(transform) #发布TF
+        self.get_logger().info(f'Published dynamic transform from camera_link to bottle_link,{transform}')
+
+def main():
+    rclpy.init()
+    node = DynamicTFBroadcaster()
+    rclpy.spin(node)
+    rclpy.shutdown()
+        
+```
+## 5.2.3 Python查询TF关系
+```python
+import rclpy
+from rclpy.node import Node
+from tf2_ros import TransformListener,Buffer  #动态坐标发布器
+from tf_transformations import euler_from_quaternion #四元数转欧拉角
+import math #角度转弧度
+
+class TFListener(Node):
+    def __init__(self):
+        super().__init__('tf_listener')
+        self.buffer = Buffer()
+        self.listener = TransformListener(self.buffer,self) #创建缓冲区
+        self.timer = self.create_timer(1.0, self.get_transform) #每隔1秒查询一次坐标关系
+    def get_transform(self):
+        """定时查询坐标关系"""
+        try:
+            #查询坐标关系，父坐标系为camera_link，子坐标系为bottle_link
+            result = self.buffer.lookup_transform('base_link','bottle_link',rclpy.time.Time(seconds = 0),rclpy.time.Duration(seconds = 1.0)) 
+            # 第三个参数为时间戳，使用当前时间 
+            transform = result.transform
+                #旋转，四元数转欧拉角
+            self.get_logger().info(f'平移{result.transform.translation}')
+            self.get_logger().info(f'旋转四元数{result.transform.rotation}')
+            self.get_logger().info(f'旋转欧拉角{euler_from_quaternion([result.transform.rotation.x,result.transform.rotation.y,result.transform.rotation.z,result.transform.rotation.w])}')
+        except Exception as e:
+            self.get_logger().warn(f'Failed to lookup transform, reason: {str(e)}')
+def main():
+    rclpy.init()
+    node = TFListener()
+    rclpy.spin(node)
+    rclpy.shutdown()
+        
+
+```
+
+```python 
+try:
+    # 尝试执行查询坐标（这行很容易报错）
+    result = self.buffer.lookup_transform('base_link','bottle_link',rclpy.time.Time(seconds = 0),rclpy.time.Duration(seconds = 1.0)) 
+
+    # 如果上面不报错，才会继续执行下面
+    self.get_logger().info(f'平移{result.transform.translation}')
+    self.get_logger().info(f'旋转四元数{result.transform.rotation}')
+
+except Exception as e:  # 捕获所有错误,存到e里
+    # 如果上面报错，直接跳到这里
+    # 程序不会崩，只会打印警告
+    self.get_logger().warn(f'Failed to lookup transform, reason: {str(e)}')
+
+```
+
+# 5.3 C++ TF之地图坐标系变换 
+没啥说的,记得创建功能包
+## 5.3.1 静态TF
+ ```cpp
+#include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp" //提供geometry_msgs::msg::TransformStamped消息接口
+#include "tf2/LinearMath/Quaternion.h" //提供tf2::Quaternion类 四元数 
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp" //提供tf2::toMsg函数 四元数转消息接口 消息类型转换函数
+#include "tf2_ros/static_transform_broadcaster.h" //提供tf2_ros::StaticTransformBroadcaster类 静态坐标发布器
+
+class StaticTFBroadcaster : public rclcpp::Node
+{
+private:
+    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_broadcaster_; //静态坐标发布器对象指针
+public:
+    StaticTFBroadcaster() : Node("static_tf_broadcaster")
+    {
+            static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this); //创建静态坐标发布器对象
+            this->publish_tf();  
+    }
+        void publish_tf()
+        {
+            geometry_msgs::msg::TransformStamped transform; //创建坐标变换消息对象
+            transform.header.stamp = this->get_clock()->now(); //设置时间戳为当前时间
+            transform.header.frame_id = "map"; //设置父坐标系为map
+            transform.child_frame_id = "target_point"; //设置子坐标系为target_point
+            transform.transform.translation.x = 5.0; //设置坐标变换的平移部分 x轴平移5.0米
+            transform.transform.translation.y = 3.0; //设置坐标变换的平移部分 y轴平移3.0米
+            transform.transform.translation.z = 0.0; //设置坐标变换的平移部分 z轴平移0.0米
+
+            tf2::Quaternion q; //创建tf2::Quaternion对象 用于表示旋转
+            q.setRPY(0, 0, M_PI / 3.0); //设置旋转为绕z轴旋转45度 欧拉角转四元数
+
+            transform.transform.rotation = tf2::toMsg(q); //将tf2::Quaternion对象转换为geometry_msgs::msg::Quaternion消息类型，并赋值给transform.transform.rotation
+            static_broadcaster_->sendTransform(transform); //发布静态坐标变换消息
+        }
+};
+
+int main(int argc, char * argv[])
+{
+    rclcpp::init(argc, argv); //初始化ROS2客户端库
+    auto node = std::make_shared<StaticTFBroadcaster>(); //创建StaticTFBroadcaster节点对象
+    rclcpp::spin(node); //进入自旋，保持节点运行
+    rclcpp::shutdown(); //关闭ROS2客户端库
+    return 0;
+}
+ ```
+
+## 5.3.2 动态TF
+```cpp
+#include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp" //提供geometry_msgs::msg::TransformStamped消息接口
+#include "tf2/LinearMath/Quaternion.h" //提供tf2::Quaternion类 四元数 
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp" //提供tf2::toMsg函数 四元数转消息接口 消息类型转换函数
+#include "tf2_ros/transform_broadcaster.h" //提供tf2_ros::TransformBroadcaster类 动态坐标发布器
+#include "chrono" //提供std::chrono库 定时器时间接口
+using namespace std::chrono_literals; //提供时间单位的字面量接口
+
+class DynamicTFBroadcaster : public rclcpp::Node
+{
+private:
+    std::shared_ptr<tf2_ros::TransformBroadcaster> dynamic_broadcaster_; //动态坐标发布器对象指针
+    rclcpp::TimerBase::SharedPtr timer_; //定时器对象指针
+public:
+    DynamicTFBroadcaster() : Node("dynamic_tf_broadcaster")
+    {
+            dynamic_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this); //创建动态坐标发布器对象
+            timer_ = this->create_wall_timer(
+                100ms,
+                std::bind(&DynamicTFBroadcaster::publish_tf, this)
+            );
+    }
+        void publish_tf()
+        {
+            geometry_msgs::msg::TransformStamped transform; //创建坐标变换消息对象
+            transform.header.stamp = this->get_clock()->now(); //设置时间戳为当前时间
+            transform.header.frame_id = "map"; //设置父坐标系为map
+            transform.child_frame_id = "base_link"; //设置子坐标系为target_point
+            transform.transform.translation.x = 2.0; //设置坐标变换的平移部分 x轴平移5.0米
+            transform.transform.translation.y = 3.0; //设置坐标变换的平移部分 y轴平移3.0米
+            transform.transform.translation.z = 0.0; //设置坐标变换的平移部分 z轴平移0.0米
+
+            tf2::Quaternion q; //创建tf2::Quaternion对象 用于表示旋转
+            q.setRPY(0, 0, M_PI / 6.0); //设置旋转为绕z轴旋转45度 欧拉角转四元数
+
+            transform.transform.rotation = tf2::toMsg(q); //将tf2::Quaternion对象转换为geometry_msgs::msg::Quaternion消息类型，并赋值给transform.transform.rotation
+            dynamic_broadcaster_->sendTransform(transform); //发布动态坐标变换消息
+        }
+};
+
+int main(int argc, char * argv[])
+{
+    rclcpp::init(argc, argv); //初始化ROS2客户端库
+    auto node = std::make_shared<DynamicTFBroadcaster>(); //创建DynamicTFBroadcaster节点对象
+    rclcpp::spin(node); //进入自旋，保持节点运行
+    rclcpp::shutdown(); //关闭ROS2客户端库
+    return 0;
+}
+```
+
+## 5.3.3 通过C++查询TF关系
+
+```cpp
+#include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp" //提供geometry_msgs::msg::TransformStamped消息接口
+#include "tf2/LinearMath/Quaternion.h" //提供tf2::Quaternion类 四元数 
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp" //提供tf2::toMsg函数 四元数转消息接口 消息类型转换函数
+#include "tf2_ros/transform_listener.h" //提供tf2_ros::TransformListener类 坐标监听器
+#include "chrono" //提供std::chrono库 定时器时间接口
+#include "tf2_ros/buffer.h" //提供tf2_ros::Buffer类 坐标变换缓冲区
+#include "tf2/utils.h" //提供tf2::fromMsg函数 消息类型转换函数 四元数转欧拉角
+using namespace std::chrono_literals; //提供时间单位的字面量接口
+
+class TFListener : public rclcpp::Node
+{
+private:
+    std::shared_ptr<tf2_ros::TransformListener> listener_; //动态坐标发布器对象指针
+    std::shared_ptr<tf2_ros::Buffer> buffer_; //坐标变换缓冲区对象指针
+    rclcpp::TimerBase::SharedPtr timer_; //定时器对象指针
+public:
+    TFListener() : Node("tf_listener")
+    {
+        buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock()); //创建坐标变换缓冲区对象
+        listener_ = std::make_shared<tf2_ros::TransformListener>(*buffer_, this); //创建动态坐标发布器对象
+        timer_ = this->create_wall_timer(
+                2000ms,
+                std::bind(&TFListener::getTransform, this)
+            );
+    }
+
+    void getTransform()
+    {
+        //到buffer查询坐标关系
+        try
+        {
+            auto transform = buffer_->lookupTransform("base_link", "target_point",this->get_clock()->now(),rclcpp::Duration::from_seconds(1.0f)); //查询坐标变换关系
+            RCLCPP_INFO(this->get_logger(), "Got transform: %f, %f, %f", transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z);
+            double yaw, pitch, roll;
+            tf2::getEulerYPR(transform.transform.rotation, yaw, pitch, roll); //
+            RCLCPP_INFO(this->get_logger(), "Got transform: yaw: %f, pitch: %f, roll: %f", yaw, pitch, roll);
+        }
+        catch (tf2::TransformException & ex)
+        {
+            RCLCPP_WARN(this->get_logger(), "Could not get transform: %s", ex.what());
+        }
+    }
+};
+
+int main(int argc, char * argv[])
+{
+    rclcpp::init(argc, argv); //初始化ROS2客户端库
+    auto node = std::make_shared<TFListener>(); //创建TFListener节点对象
+    rclcpp::spin(node); //进入自旋，保持节点运行
+    rclcpp::shutdown(); //关闭ROS2客户端库
+    return 0;
+}
+```
+
 
