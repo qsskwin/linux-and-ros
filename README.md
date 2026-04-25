@@ -1928,7 +1928,134 @@ int main(int argc, char *argv[])
     return 0;
 }
 ```
+# 4.6 使用launch启动脚本  
+## 4.6.1 使用launch启动多个节点
+在功能包文件夹下新建一个文件夹,取名为launch,再新建文件,一般叫做xxx_launch.py,然后写代码,写完后要进行拷贝,安装在install目录下.在cmakelist里,再install一个,然后加一个DIRECTORY launch DESTINATION share/${PROJECT_NAME} 这是cpp版本    
+对于python版本,在setup.py里from glob import glob,然后在data_files里添加路径,详情看setup.py文件,然后colconbuild 就可以看见launch被拷贝过去了.运行source 然后`ros2 launch demo_cpp_service demo.launch.py`即可运行该脚本
+
+
+```python
+import launch
+import launch_ros
+def generate_launch_description():
+    #声明一个launch参数
+
+    #把launch的参数手动传递给某个节点
+    """产生launch描述"""
+    action_node_turtlesim_node = launch_ros.actions.Node(
+        package='turtlesim',
+        executable='turtlesim_node',
+        output='screen',
+    )
+    action_node_patrol_client = launch_ros.actions.Node(
+        package='demo_cpp_service',
+        executable='patrol_client',
+        output='log',
+    )
+    action_node_turtle_control = launch_ros.actions.Node(
+        package='demo_cpp_service',
+        executable='turtle_control',
+        output='both',
+    )
+
+    return launch.LaunchDescription([
+        action_node_turtlesim_node,
+        action_node_patrol_client,
+        action_node_turtle_control,
+    ])
+
+```
+## 4.6.2 使用launch传递参数
+`ros2 run turtlesim turtlesim_node --ros-args -p background_g:=255`可以带参数启动更改背景颜色
+
+```python
+import launch
+import launch_ros
+def generate_launch_description():
+    #声明一个launch参数
+    action_declare_arg_background_g = launch.actions.DeclareLaunchArgument('launch_arg_bg', default_value= "150", description='背景颜色')
+    #把launch的参数手动传递给某个节点
+    """产生launch描述"""
+    action_node_turtlesim_node = launch_ros.actions.Node(
+        package='turtlesim',
+        executable='turtlesim_node',
+        parameters=[{'background_g': launch.substitutions.LaunchConfiguration('launch_arg_bg', default="150")}],
+        output='screen',
+    )
+    action_node_patrol_client = launch_ros.actions.Node(
+        package='demo_cpp_service',
+        executable='patrol_client',
+        output='log',
+    )
+    action_node_turtle_control = launch_ros.actions.Node(
+        package='demo_cpp_service',
+        executable='turtle_control',
+        output='both',
+    )
+
+    return launch.LaunchDescription([
+        action_declare_arg_background_g,
+        action_node_turtlesim_node,
+        action_node_patrol_client,
+        action_node_turtle_control,
+    ])
+
+```
+当添加上述脚本了之后,可以在启动脚本的时候直接修改其参数例如:    
+这时候再使用`ros2 launch demo_cpp_service demo.launch.py launch_arg_bg:=0` 即可修改 
+
+## 4.6.3 launch使用进阶
+Launch三大组件:动作,条件,替换   
+动作可以是一个节点,一个打印,一段终端指令,还可以是另一个launch文件.      
+替换:使用launch的参数替换节点的参数值    
+条件:利用条件可以决定哪些动作启动,哪些不启动,相当于if
+```python
+import launch
+import launch_ros
+from ament_index_python.packages import get_package_share_directory
+import launch.launch_description_sources
 
 
 
+def generate_launch_description():
+    action_declare_startup_rqt = launch.actions.DeclareLaunchArgument('startup_rqt', default_value= "False", description='是否启动rqt工具')
+    startup_rqt = launch.substitutions.LaunchConfiguration('startup_rqt', default="False")
+    # 动作1-启动其他launch文件
+    multisim_launch_path = get_package_share_directory('turtlesim') + '/launch/multisim.launch.py' ##路径拼接,找到turtlesim包中的multisim.launch.py文件
+    action_include_launch = launch.actions.IncludeLaunchDescription(
+        launch.launch_description_sources.PythonLaunchDescriptionSource(
+            [multisim_launch_path]
+        )
+    )
+
+    # 动作2-打印数据
+    action_log_info = launch.actions.LogInfo(msg=str(multisim_launch_path))
+
+    # 动作3-执行进程,即执行一个命令行
+    #  if startup_rqt:
+    #  run:rqt
+    action_topic_list = launch.actions.ExecuteProcess(
+        condition=launch.conditions.IfCondition(startup_rqt),
+        cmd=['rqt'],
+    )
+
+    # 动作4:组织动作成组,把多个动作放到一组
+    action_group = launch.actions.GroupAction([
+        #动作5:定时器
+        launch.actions.TimerAction(
+            period=2.0, #每隔2秒执行一次
+            actions=[action_include_launch]
+        ),
+        launch.actions.TimerAction(
+            period=4.0, #每隔4秒执行一次
+            actions=[action_topic_list]
+        ),
+    ])
+
+    return launch.LaunchDescription([
+        action_log_info,
+        action_group,
+    ])
+
+```
 
