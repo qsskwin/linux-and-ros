@@ -2382,3 +2382,471 @@ int main(int argc, char * argv[])
 `rviz2 -d ../rviz_tf.rviz`可以运行自己保存的配置文件   
 # 5.5 数据记录工具ros2 bag
 使用`ros2 bag record /turtle1/cmd_vel` 即某一个话题的名字,就可以记录某一个话题的数据.输入 ls ros*,可以看见两个文件,即数据文件.使用cat rosbag2_.xxxxxx.metadata.yaml 可以查看里面的数据,使用`ros2 bag play rosbag2xxx`可以重新播放该数据 按table补全 ros2 bag -h可以查看相关命令
+# 5.6 Git进阶
+```bash
+git init //初始化git
+git add .提交当前目录下所有文件到缓存区
+git commit -m "first commit" //第一次提交,这是提交到本地仓库
+git status //查看修改的文件
+git diff //查看具体修改消息 加文件名可以看某一个单一文件的修改
+git checkout //不在缓存区的更改可以这样删除
+git reset //从缓存区提出来,加名字可以踢某一个文件出来
+--- 
+//在本地仓库,还没remote到远程的时候,还能踢出
+git log 
+git reset 哈希表 可以撤回到上一个状态 
+---
+git branch //查看当前存在的分支
+git branch xxx 创建新分支
+git checkout xxx 切换到xxx分支
+git log //查看当前代码提交到哪
+git merge xxx //把xxx分支合并到当前分支上
+git branch -D xxx //删除分支 
+```
+# Gitee和Github的使用
+```bash
+git remote add origin xxx //添加仓库地址
+git push -u origin "master" //将当前分支推送
+git pull //拉取
+```
+
+# 第六章 仿真
+
+# 6.1 机器人建模与仿真概述
+这部分就详细介绍了一些仿真平台,以及机器人的组成.仿真平台有gazebo classic,isaac Sim,MuJoCo,gazebo harmonic等    
+# 6.2 使用URDF创建机器人
+URDF(Unified 统一的 Robot Description Format)统一的机器人描述格式,是ROS里用XML写的机器人声明描述文件 XML(Extensible Markup Language,可扩展标记语言)    
+URDF本质就是一种专用的XML文件,URDF是基于XML定制的一套专用标签规范,可以理解为XML是模板,URDF是用这套模板定好了专属的规则.
+## 6.2.1 帮机器人创建一个身体
+URDF使用XML来描述机器人的几何结构,传感器,执行器等信息.    
+URDF本身并不需要添加任何客户端库,因此不用添加任何依赖    
+一般会把机器人模型文件放到功能包的urdf文件夹下,urdf文件不需要跟python一样缩进对齐,只是为了好看而已    
+URDF里的link = 机器人身上每一块刚性不变形的实体刚体部件,例如机械臂的基座,大臂,小臂,末端夹爪,都是一个link,再比如人形机器人的躯干,大腿,小腿等,每一块硬骨头部件,各自都是一个link,在机器人中,joint才是连接,joint = 关节,转轴,用来把两个link连接起来.visial里的origin是给人看的,可视化里看的,实际给电脑看的连接位置则是joint里的origin     
+`urdf_to_graphviz first_robot.urdf`在urdf下使用这个命令,会生成gv文件和pdf文件
+```xml
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot name="first_robot">
+<!-- 机器人的身体部分   另外,udrf格式不需要缩进对齐,对齐只是为了好看-->
+    <link name="base_link">
+        <!-- 部件的外观描述,用visual -->
+        <visual> 
+        <!-- 沿着自己几何中心的偏移和旋转量 -->
+            <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+            <!-- 几何形状 -->
+            <geometry>
+                <!-- 圆柱体,半径0,1m,高度0.12m -->
+                <cylinder length="0.1" radius="0.12"/>
+            </geometry>
+            <!-- 材质颜色,最后一个参数是透明度 1.0表示不透明,0.5表示半透明 -->
+            <material name="white">
+                <color rgba="1.0 1.0 1.0 0.5"/>
+            </material>
+        </visual>
+    </link>
+
+<!--机器人的IMU部件,惯性测量传感器 -->
+    <link name="imu_link">
+        <visual>
+            <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+            <geometry>
+                <box size="0.02 0.02 0.02"/>
+            </geometry>
+            <material name="black">
+                <color rgba="0.0 0.0 0.0 0.5"/>
+            </material>
+        </visual>
+    </link>
+
+<!-- 连接身体和IMU的关节 -->
+    <joint name="imu_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="imu_link"/>
+        <origin xyz="0.0 0.0 0.03" rpy="0.0 0.0 0.0"/>
+    </joint>
+</robot>
+```
+## 6.2.2 在RViz中显示机器人
+`sudo apt install ros-$ROS_DISTRO-joint-state-publisher`安装这个节点,关节状态发布器,是一个ros官方的标准功能包       
+以下是launch脚本的写法 
+```python
+import launch
+import launch_ros
+from ament_index_python.packages import get_package_share_directory
+import os
+
+def generate_launch_description():
+    # Get the path to the robot description package
+    urdf_package_path = get_package_share_directory('fishbot_description')
+    default_urdf_path = os.path.join(urdf_package_path, 'urdf', 'first_robot.urdf')
+    default_rviz_config_path = os.path.join(urdf_package_path, 'config', 'display_robot_model.rviz')
+    # 声明一个urdf目录的launch参数,方便修改
+    action_declare_arg_mode_path = launch.actions.DeclareLaunchArgument(
+        name='model',
+        default_value=str(default_urdf_path),
+        description='加载的模型文件路径'
+    )
+
+    # 通过文件路径,获取内容,并转换成参数值对象,以供传入 RobotStatePublisher 节点 substitutions 替换
+    substitutions_command_result = launch.substitutions.Command(['cat ', launch.substitutions.LaunchConfiguration('model')])
+    #把文本内容封装成ros2节点能识别的参数形式,
+    robot_description_value = launch_ros.parameter_descriptions.ParameterValue(substitutions_command_result, value_type=str) 
+    #启动第一个节点 robot_state_publisher,把上面获取的参数传入,让它发布机器人状态信息,以供rviz显示使用
+    action_robot_state_publisher = launch_ros.actions.Node(
+        package='robot_state_publisher', #功能包名
+        executable='robot_state_publisher', #可执行文件名
+        name='robot_state_publisher', #节点运行时的名字
+        output='screen', #日志打印到终端
+        parameters=[{'robot_description': robot_description_value}] #传入的参数 robot_description是节点要求必须传的参数名,是固定死的
+    )
+    #启动第二个节点
+    action_joint_state_publisher = launch_ros.actions.Node(
+        package='joint_state_publisher',
+        executable='joint_state_publisher', 
+        name='joint_state_publisher',
+        output='screen',
+    )    
+    #启动第三个节点 rviz可视化工具
+    action_rviz_node = launch_ros.actions.Node(
+        package='rviz2',
+        executable='rviz2',
+        arguments=['-d', default_rviz_config_path],  #arguments在命令行后面加东西,类似-d 传个路径 ;   parameters是给节点传参数的,类似--ros-args - xx:
+    )
+
+    #返回所有启动动作
+    return launch.LaunchDescription([
+        action_declare_arg_mode_path,
+        action_robot_state_publisher,
+        action_joint_state_publisher,
+        action_rviz_node,
+        ])
+```
+## 6.2.3 使用Xacro简化URDF
+Xacro (XML Macro)是基于XML的宏语言,用于简化URDF文件的创建和维护.使用它可以将部件等定义为宏,在需要使用的时候进行调用即可.
+`sudo apt install ros-$ROS-DISTRO-xacro`
+`xacro first_robot.xacro的路径`把xacro转换成urdf格式
+这是Xacro转换,可以与上面的对比着看    
+
+```XML
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="first_robot">
+    <xacro:macro name = "base_link" params="length radius">
+        <link name="base_link">
+            <!-- 部件的外观描述,用visual -->
+            <visual> 
+            <!-- 沿着自己几何中心的偏移和旋转量 -->
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+                <!-- 几何形状 -->
+                <geometry>
+                    <!-- 圆柱体,半径0,1m,高度0.12m -->
+                    <cylinder length="${length}" radius="${radius}"/>
+                </geometry>
+                <!-- 材质颜色,最后一个参数是透明度 1.0表示不透明,0.5表示半透明 -->
+                <material name="white">
+                    <color rgba="1.0 1.0 1.0 0.5"/>
+                </material>
+            </visual>
+    </link>
+    </xacro:macro>
+
+
+    <xacro:macro name = "imu_link" params="imu_name xyz">    
+        <link name="${imu_name}_link">
+            <visual>
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                    <box size="0.02 0.02 0.02"/>
+                </geometry>
+                <material name="black">
+                    <color rgba="0.0 0.0 0.0 0.5"/>
+                </material>
+            </visual>
+        </link>
+
+        <joint name="${imu_name}_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="${imu_name}_link"/>
+            <origin xyz="${xyz}" rpy="0.0 0.0 0.0"/>
+        </joint>  
+    </xacro:macro>
+
+
+    <xacro:base_link length="0.1" radius="0.12"/>
+    <xacro:imu_link imu_name="imu_up" xyz="0.0 0.0 0.03"/>
+    <xacro:imu_link imu_name="imu_down" xyz="0.0 0.0 -0.03"/>
+</robot>
+
+```
+## 6.2.4 创建机器人及其传感器部件
+base.urdf.xacro这种命名只是ros官方推荐的命名规则,也可以用base_urdf.xacro
+先在src的urdf下创建fishbot文件夹,该文件夹下再创建sensor文件夹,在fishbot文件夹下创建base.urdf.xacro和fishbot.urdf.xacro分开管理,sensor文件夹下包含camera.urdf.xacro
+imu.urdf.xacro laser.urdf.xacro,文件如下
+
+```XML
+base.urdf
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name = "base_xacro" params="length radius">
+        <link name="base_link">
+            <!-- 部件的外观描述,用visual -->
+            <visual> 
+            <!-- 沿着自己几何中心的偏移和旋转量 -->
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+                <!-- 几何形状 -->
+                <geometry>
+                    <!-- 圆柱体,半径0,1m,高度0.12m -->
+                    <cylinder length="${length}" radius="${radius}"/>
+                </geometry>
+                <!-- 材质颜色,最后一个参数是透明度 1.0表示不透明,0.5表示半透明 -->
+                <material name="white">
+                    <color rgba="1.0 1.0 1.0 0.5"/>
+                </material>
+            </visual>
+    </link>
+    </xacro:macro>
+</robot>
+---------------------------sensor
+imu
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name = "imu_xacro" params="xyz">    
+        <link name="imu_link">
+            <visual>
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                    <box size="0.02 0.02 0.02"/>
+                </geometry>
+                <material name="black">
+                    <color rgba="0.0 0.0 0.0 0.5"/>
+                </material>
+            </visual>
+        </link>
+
+        <joint name="imu_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="imu_link"/>
+            <origin xyz="${xyz}" rpy="0.0 0.0 0.0"/>
+        </joint>  
+    </xacro:macro>
+</robot>
+
+laser
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name = "laser_xacro" params="xyz">    
+    <!-- 激光雷达支撑杆 -->
+         <link name="laser_cylinder_link">
+            <visual>
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                    <cylinder radius="0.01" length="0.10"/>
+                </geometry>
+                <material name="black">
+                    <color rgba="0.0 0.0 0.0 1.0"/>
+                </material>
+            </visual>
+        </link>
+
+         <link name="laser_link">
+            <visual>
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                    <cylinder radius="0.02" length="0.02"/>
+                </geometry>
+                <material name="black">
+                    <color rgba="0.0 0.0 0.0 1.0"/>
+                </material>
+            </visual>
+        </link>
+
+
+
+        <joint name="laser_joint" type="fixed">
+            <parent link="laser_cylinder_link"/>
+            <child link="laser_link"/>
+            <origin xyz="0.0 0.0 0.05" rpy="0.0 0.0 0.0"/>
+        </joint>  
+
+        <joint name="laser_cylinder_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="laser_cylinder_link"/>
+            <origin xyz="${xyz}" rpy="0.0 0.0 0.0"/>
+        </joint>  
+        
+    </xacro:macro>
+</robot>
+
+
+camera
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name = "camera_xacro" params="xyz">    
+        <link name="camera_link">
+            <visual>
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                    <box size="0.02 0.10 0.02"/>
+                </geometry>
+                <material name="black">
+                    <color rgba="0.0 0.0 0.0 0.5"/>
+                </material>
+            </visual>
+        </link>
+
+        <joint name="camera_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="camera_link"/>
+            <origin xyz="${xyz}" rpy="0.0 0.0 0.0"/>
+        </joint>  
+    </xacro:macro>
+</robot>
+
+-------------------------fishbot
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fishbot">
+
+<!-- 基础结构 -->
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/base.urdf.xacro"/>
+<!-- 传感器 -->
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/imu.urdf.xacro"/>
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/camera.urdf.xacro"/>
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/laser.urdf.xacro"/>
+
+<xacro:base_xacro length="0.12" radius="0.1"/>
+<xacro:imu_xacro xyz="0.0 0.0 0.02"/>
+<xacro:laser_xacro xyz="0.0 0.0 0.10"/>
+<xacro:camera_xacro xyz="0.10 0.0 0.075"/>
+</robot>
+
+
+```
+仔细弄清楚其相关关系.     
+## 6.2.5 完善机器人执行器部件   
+在urdf下创建actuator文件夹,创建wheel.urdf.xacro和caster.urdf.xacro 然后跟上一节一样添加xml
+```XML
+wheel
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+<!-- 轮子不止一个,需要复用,加名字 -->
+    <xacro:macro name = "wheel_xacro" params="wheel_name xyz">     
+        <link name="${wheel_name}_link">
+            <visual>
+                <origin xyz="0.0 0.0 0.0" rpy="1.57079 0.0 0.0"/>
+                <geometry>
+                    <cylinder radius="0.032" length="0.04"/>
+                </geometry>
+                <material name="yellow">
+                    <color rgba="1.0 1.0 0.0 0.8"/>
+                </material>
+            </visual>
+        </link>
+<!-- type类型要改成可转动的 -->
+        <joint name="${wheel_name}_joint" type="continuous">
+            <parent link="base_link"/>
+            <child link="${wheel_name}_link"/>
+            <origin xyz="${xyz}" rpy="0.0 0.0 0.0"/>
+            <axis xyz="0.0 1.0 0.0"/> <!-- 轮子绕y轴转动 -->
+        </joint>  
+    </xacro:macro>
+</robot>
+
+caster
+
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+<!-- 轮子不止一个,需要复用,加名字 -->
+    <xacro:macro name = "caster_xacro" params="caster_name xyz">     
+        <link name="${caster_name}_link">
+            <visual>
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                    <sphere radius="0.016"/>
+                </geometry>
+                <material name="yellow">
+                    <color rgba="1.0 1.0 0.0 0.8"/>
+                </material>
+            </visual>
+        </link>
+<!-- type类型要改成可转动的 -->
+        <joint name="${caster_name}_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="${caster_name}_link"/>
+            <origin xyz="${xyz}" rpy="0.0 0.0 0.0"/>
+        </joint>  
+    </xacro:macro>
+</robot>
+--------------------------
+fishbot
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fishbot">
+
+<!-- 基础结构 -->
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/base.urdf.xacro"/>
+<!-- 传感器 -->
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/imu.urdf.xacro"/>
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/camera.urdf.xacro"/>
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/sensor/laser.urdf.xacro"/>
+<!-- 执行器 -->
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/actuator/wheel.urdf.xacro"/>
+<xacro:include filename="$(find fishbot_description)/urdf/fishbot/actuator/caster.urdf.xacro"/>
+
+
+<xacro:base_xacro length="0.12" radius="0.1"/>
+<xacro:imu_xacro xyz="0.0 0.0 0.02"/>
+<xacro:laser_xacro xyz="0.0 0.0 0.10"/>
+<xacro:camera_xacro xyz="0.10 0.0 0.075"/>
+<xacro:wheel_xacro wheel_name="left_wheel" xyz="0.0 0.10 -0.06"/>
+<xacro:wheel_xacro wheel_name="right_wheel" xyz="0.0 -0.10 -0.06"/>
+<xacro:caster_xacro caster_name="front_caster" xyz="0.08 0.0 -0.076"/>
+<xacro:caster_xacro caster_name="back_caster" xyz="-0.08 0.0 -0.076"/>
+</robot>
+
+```
+还是一样的,要搞清楚相对关系,另外 ros2 launch xx model:= 的时候,这边加绝对路径启动,属于重新传递函数,这在launch中写的很清楚详细    
+
+## 6.2.6 贴合地面,添加虚拟部件
+在base.urdf.xacro中添加
+```XML
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name = "base_xacro" params="length radius">
+        <link name="base_footprint" /> <!-- 机器人底盘的基准坐标系,为空 -->
+        <link name="base_link">
+            <!-- 部件的外观描述,用visual -->
+            <visual> 
+            <!-- 沿着自己几何中心的偏移和旋转量 -->
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+                <!-- 几何形状 -->
+                <geometry>
+                    <!-- 圆柱体,半径0,1m,高度0.12m -->
+                    <cylinder length="${length}" radius="${radius}"/>
+                </geometry>
+                <!-- 材质颜色,最后一个参数是透明度 1.0表示不透明,0.5表示半透明 -->
+                <material name="white">
+                    <color rgba="1.0 1.0 1.0 0.5"/>
+                </material>
+            </visual>
+    </link>
+
+
+    <joint name="joint_name" type="fixed">
+        <origin xyz="0.0 0.0 ${length/2+0.032-0.001}" rpy="0.0 0.0 0.0"/>
+        <parent link="base_footprint"/>
+        <child link="base_link"/>
+    </joint>
+
+
+
+    </xacro:macro>
+</robot>
+```
