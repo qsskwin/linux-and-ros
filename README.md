@@ -2417,6 +2417,7 @@ git pull //拉取
 # 6.2 使用URDF创建机器人
 URDF(Unified 统一的 Robot Description Format)统一的机器人描述格式,是ROS里用XML写的机器人声明描述文件 XML(Extensible Markup Language,可扩展标记语言)    
 URDF本质就是一种专用的XML文件,URDF是基于XML定制的一套专用标签规范,可以理解为XML是模板,URDF是用这套模板定好了专属的规则.
+3D打印的时候传的是STL格式的文件,不是这个,这个只是在仿真软件中用的文件    
 ## 6.2.1 帮机器人创建一个身体
 URDF使用XML来描述机器人的几何结构,传感器,执行器等信息.    
 URDF本身并不需要添加任何客户端库,因此不用添加任何依赖    
@@ -2848,5 +2849,415 @@ fishbot
 
 
     </xacro:macro>
+</robot>
+```
+![alt text](assets/README/image-13.png)
+
+
+# 6.3 添加物理属性
+## 6.3.1 为机器人部件添加碰撞属性 
+collision是碰撞属性,可以跟visual一样   
+修改base.urdf.xacro,给base_link添加碰撞属性     
+例如,在base里就是这样加载的:
+```XML
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name="base_xacro" params="length radius">
+        <link name="base_footprint" /> <!-- 机器人底盘的基准坐标系 -->
+        <link name="base_link">
+            <!-- 部件的外观描述,用visual -->
+            <visual>
+                <!-- 沿着自己几何中心的偏移和旋转量 -->
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+                <!-- 几何形状 -->
+                <geometry>
+                    <!-- 圆柱体,半径0,1m,高度0.12m -->
+                    <cylinder length="${length}" radius="${radius}" />
+                </geometry>
+                <!-- 材质颜色,最后一个参数是透明度 1.0表示不透明,0.5表示半透明 -->
+                <material name="white">
+                    <color rgba="1.0 1.0 1.0 0.5" />
+                </material>
+            </visual>
+            <collision>
+                <!-- 沿着自己几何中心的偏移和旋转量 -->
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+                <!-- 几何形状 -->
+                <geometry>
+                    <!-- 圆柱体,半径0,1m,高度0.12m -->
+                    <cylinder length="${length}" radius="${radius}" />
+                </geometry>
+                <!-- 材质颜色,最后一个参数是透明度 1.0表示不透明,0.5表示半透明 -->
+                <material name="white">
+                    <color rgba="1.0 1.0 1.0 0.5" />
+                </material>
+            </collision>
+        </link>
+
+
+        <joint name="joint_name" type="fixed">
+            <origin xyz="0.0 0.0 ${length/2+0.032-0.001}" rpy="0.0 0.0 0.0" />
+            <parent link="base_footprint" />
+            <child link="base_link" />
+        </joint>
+
+
+    </xacro:macro>
+</robot>
+```
+其他部件的修改方式同理     
+## 6.3.2 为机器人部件添加质量与惯性
+质量用kg表示,旋转惯性则需要3x3的矩阵表示,或者叫做转动惯量,这里是常见的惯性矩阵
+```XML
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+    <xacro:macro name="box_inertia" params="m w h d">
+        <inertial>
+            <mass value="${m}" />
+            <inertia ixx="${(m/12) * (h*h + d*d)}" ixy="0.0" ixz="0.0" iyy="${(m/12) * (w*w + d*d)}" iyz="0.0" izz="${(m/12) * (w*w + h*h)}" />
+        </inertial>
+    </xacro:macro>
+
+    <xacro:macro name="cylinder_inertia" params="m r h">
+        <inertial>
+            <mass value="${m}" />
+            <inertia ixx="${(m/12) * (3*r*r + h*h)}" ixy="0" ixz="0" iyy="${(m/12) * (3*r*r + h*h)}" iyz="0" izz="${(m/2) * (r*r)}" />
+        </inertial>
+    </xacro:macro>
+
+    <xacro:macro name="sphere_inertia" params="m r">
+        <inertial>
+            <mass value="${m}" />
+            <inertia ixx="${(2/5) * m * (r*r)}" ixy="0.0" ixz="0.0" iyy="${(2/5) * m * (r*r)}" iyz="0.0" izz="${(2/5) * m * (r*r)}" />
+        </inertial>
+    </xacro:macro>
+
+</robot>
+
+```
+哪个文件使用这个,就需要在哪个文件下引用这个宏,类似于下面这种,写在link里  
+<xacro:cylinder_inertia m = "0.05" r = "0.032" h = "0.04" />   
+# 6.4 在Gazebo中完成机器人仿真
+## 6.4.1 安装与使用Gazebo构建世界
+`sudo apt install gazebo`   
+安装gazebo,这篇可以看原视频安装,不在此赘述      
+## 6.4.2 在Gazebo中加载机器人模型  
+gazebo是sdf,需要将urdf转换成sdf格式,sdf也是xml,只是拓展了urdf   
+安装转换功能包:`sudo apt install ros-$ROS_DISTRO-gazebo-ros-pkgs`,把urdf转换为sdf     
+在launch下新建gezebo_sim.launch.py的文件    
+```python
+import launch
+import launch_ros
+from ament_index_python.packages import get_package_share_directory
+import os
+
+def generate_launch_description():
+    # Get the path to the robot description package
+    urdf_package_path = get_package_share_directory('fishbot_description')
+    
+    default_xacro_path = os.path.join(urdf_package_path, 'urdf', 'fishbot/fishbot.urdf.xacro')
+    # default_rviz_config_path = os.path.join(urdf_package_path, 'config', 'display_robot_model.rviz')
+    default_gazebo_world_path = os.path.join(urdf_package_path, 'world', 'custom_room.world')
+
+    # 声明一个urdf目录的launch参数,方便修改
+    action_declare_arg_mode_path = launch.actions.DeclareLaunchArgument(
+        name='model',
+        default_value=str(default_xacro_path),
+        description='加载的模型文件路径'
+    )
+
+    # 通过文件路径,获取内容,并转换成参数值对象,以供传入 RobotStatePublisher 节点 substitutions 替换
+    substitutions_command_result = launch.substitutions.Command(['xacro ', launch.substitutions.LaunchConfiguration('model')])
+    #把文本内容封装成ros2节点能识别的参数形式,
+    robot_description_value = launch_ros.parameter_descriptions.ParameterValue(substitutions_command_result, value_type=str) 
+    #启动第一个节点 robot_state_publisher,把上面获取的参数传入,让它发布机器人状态信息,以供rviz显示使用
+    action_robot_state_publisher = launch_ros.actions.Node(
+        package='robot_state_publisher', #功能包名
+        executable='robot_state_publisher', #可执行文件名
+        name='robot_state_publisher', #节点运行时的名字
+        output='screen', #日志打印到终端
+        parameters=[{'robot_description': robot_description_value}] #传入的参数 robot_description是节点要求必须传的参数名,是固定死的
+    )
+    # 这是刚才安装的功能包里的launch启动文件,启动gazebo的
+    action_launch_gazebo = launch.actions.IncludeLaunchDescription(
+        launch.launch_description_sources.PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory('gazebo_ros'), 'launch', 'gazebo.launch.py')
+        ),
+        launch_arguments=[('world', default_gazebo_world_path), ('verbose', 'true')]
+    )
+#   这也是前面安装的功能包里的工具
+    action_spawn_entity = launch_ros.actions.Node(
+        package='gazebo_ros',
+        executable='spawn_entity.py',
+        arguments=['-topic', 'robot_description', '-entity', 'fishbot'],
+        output='screen'
+    )
+    #返回所有启动动作
+    return launch.LaunchDescription([
+        action_declare_arg_mode_path,
+        action_robot_state_publisher,
+        action_launch_gazebo,
+        action_spawn_entity
+
+        ])
+```
+流程是把xacro转换成urdf,然后通过entity转换成sdf格式,转换前先打开world世界,然后再转换,entity内部会通过网络通信等方式,将转换的sdf直接加载进gazebo世界中.
+## 6.4.3 使用Gazebo标签扩展URDF
+```XML
+        <gazebo reference="${caster_name}_link">
+            <!-- 切向摩擦系数 默认1.0-->
+            <mu1 value="0.0" />
+               <!-- 法向摩擦系数 默认1.0-->
+            <mu2 value="0.0" />
+                <!-- 接触的刚度系数 -->
+            <kp value="1000000000.0" />
+                <!-- 摩擦力的阻尼系数 -->
+            <kd value="1.0" />
+        </gazebo>
+
+        <gazebo reference="laser_cylinder_link">
+            <material>Gazebo/Black</material>
+        </gazebo>
+        <gazebo reference="laser_link">
+            <material>Gazebo/Black</material>
+        </gazebo>
+```
+可咨询AI获取详细的关于Gazebo标签的知识    
+## 6.4.4 使用两轮差速插件控制机器人
+
+```XML
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name="gazebo_control_plugin">
+        <gazebo>
+            <plugin name='diff_drive' filename='libgazebo_ros_diff_drive.so'>
+                <ros>
+                    <namespace>/</namespace> 使用默认命名空间
+                    <remapping>cmd_vel:=cmd_vel</remapping> 重映射
+                    <remapping>odom:=odom</remapping>   
+                </ros>
+                <update_rate>30</update_rate> 信息更新频率 Hz 
+                <!-- wheels -->
+                <left_joint>left_wheel_joint</left_joint> 配置关节
+                <right_joint>right_wheel_joint</right_joint>
+                <!-- kinematics -->
+                <wheel_separation>0.2</wheel_separation> 两轮之间的间距
+                <wheel_diameter>0.064</wheel_diameter> 轮子直径
+                <!-- limits -->
+                <max_wheel_torque>20</max_wheel_torque> 最大扭矩
+                <max_wheel_acceleration>1.0</max_wheel_acceleration> 最大加速度
+                <!-- output -->
+                <publish_odom>true</publish_odom>   是否发布odom
+                <publish_odom_tf>true</publish_odom_tf>
+                <publish_wheel_tf>true</publish_wheel_tf>   
+
+                <odometry_frame>odom</odometry_frame> frame_id   
+                <robot_base_frame>base_footprint</robot_base_frame>   相当于父子坐标系
+            </plugin>
+        </gazebo>
+   </xacro:macro>
+</robot>
+```
+然后在fishbot.urdf.xacro下引入这个插件,然后脚本开启gazebo.可以用ros2 topic list查看当前话题,可以看当前多出来了哪些话题.
+使用`ros2 run teleop_twist_keyboard teleop_twist_keyboard`开启键盘控制节点   
+使用rqt,用插件看tf tree 可以看结构,用rviz2 add robotmodel tf等,可以看相关数据,还可以add by topic里odom下的Odometry查看机器人当前的指向和历史轨迹    
+## 6.4.5 激光雷达传感器仿真 
+```XML
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name="gazebo_sens_plugin">
+        <gazebo reference="laser_link">     参考关节,写雷达所对应的关节名字
+            <sensor name="laserscan" type="ray"> 射线,激光的意思
+                <plugin name="laserscan" filename="libgazebo_ros_ray_sensor.so"> 动态链接库 来自gazebo_ros 这个功能包,解析下面的标签参数,设置到gazebo里
+                    <ros>
+                        <namespace>/</namespace>
+                        <remapping>~/out:=scan</remapping> 这个库默认输出是out话题,重映射成其他名字话题
+                    </ros>
+                    <output_type>sensor_msgs/LaserScan</output_type> 改变消息接口类型
+                    <frame_name>laser_link</frame_name> 坐标系名字
+                </plugin>
+                <always_on>true</always_on> 
+                <visualize>true</visualize>
+                <update_rate>5</update_rate>
+                <pose>0 0 0 0 0 0</pose> 无任何偏移旋转,固定到laser_link上
+								<!-- 激光传感器配置 -->
+                <ray>
+                    <!-- 设置扫描范围 -->
+                    <scan>
+                        <horizontal>
+                            <samples>360</samples> 采样点
+                            <resolution>1.000000</resolution> 分辨率
+                            <min_angle>0.000000</min_angle> 
+                            <max_angle>6.280000</max_angle>
+                        </horizontal>
+                    </scan>
+                    <!-- 设置扫描距离 -->
+                    <range>
+                        <min>0.120000</min> 最小测距
+                        <max>8.0</max>  最大测距
+                        <resolution>0.015000</resolution> 精度
+                    </range>
+                    <!-- 设置噪声 -->
+                    <noise>
+                        <type>gaussian</type>
+                        <mean>0.0</mean>    均值
+                        <stddev>0.01</stddev>   标准差
+                    </noise>
+                </ray>
+            </sensor>
+        </gazebo>
+   </xacro:macro>
+</robot>
+
+```
+然后在fishbot.urdf.xacro引入此插件并使用   
+引入后启动gazebo进行查看,并可通过rviz2进行数据可视化,需要add激光雷达的话题    
+## 6.4.6 惯性测量传感器仿真
+```XML
+<gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu"> 
+        <plugin name="imu_plugin" filename="libgazebo_ros_imu_sensor.so">
+            <ros>
+                <namespace>/</namespace>
+                <remapping>~/out:=imu</remapping>
+            </ros>
+            <initial_orientation_as_reference>false</initial_orientation_as_reference> 不适用初始化方向作为参考器
+        </plugin>
+        <update_rate>100</update_rate> 刷新频率
+        <always_on>true</always_on> 打开传感器
+        <!-- 六轴噪声设置 -->
+        <imu>
+            <angular_velocity>
+                <x>
+                    <noise type="gaussian">
+                        <mean>0.0</mean>
+                        <stddev>2e-4</stddev>
+                        <bias_mean>0.0000075</bias_mean>
+                        <bias_stddev>0.0000008</bias_stddev>
+                    </noise>
+                </x>
+                <y>
+                    <noise type="gaussian">
+                        <mean>0.0</mean>
+                        <stddev>2e-4</stddev>
+                        <bias_mean>0.0000075</bias_mean>
+                        <bias_stddev>0.0000008</bias_stddev>
+                    </noise>
+                </y>
+                <z>
+                    <noise type="gaussian">
+                        <mean>0.0</mean>
+                        <stddev>2e-4</stddev>
+                        <bias_mean>0.0000075</bias_mean>
+                        <bias_stddev>0.0000008</bias_stddev>
+                    </noise>
+                </z>
+            </angular_velocity>
+            <linear_acceleration>
+                <x>
+                    <noise type="gaussian">
+                        <mean>0.0</mean>
+                        <stddev>1.7e-2</stddev>
+                        <bias_mean>0.1</bias_mean>
+                        <bias_stddev>0.001</bias_stddev>
+                    </noise>
+                </x>
+                <y>
+                    <noise type="gaussian">
+                        <mean>0.0</mean>
+                        <stddev>1.7e-2</stddev>
+                        <bias_mean>0.1</bias_mean>
+                        <bias_stddev>0.001</bias_stddev>
+                    </noise>
+                </y>
+                <z>
+                    <noise type="gaussian">
+                        <mean>0.0</mean>
+                        <stddev>1.7e-2</stddev>
+                        <bias_mean>0.1</bias_mean>
+                        <bias_stddev>0.001</bias_stddev>
+                    </noise>
+                </z>
+            </linear_acceleration>
+        </imu>
+    </sensor>
+</gazebo>
+
+```
+ro2 tipic echo /imu --once 可以只查看一次imu输出的值   
+## 6.4.7 深度相机传感器仿真   
+深度相机默认的前方是Z轴,所以在URDF文件中,需要添加一个虚拟的部件调整方位
+```XML
+<?xml version="1.0"?>
+<!-- 机器人URDF文件声明 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:include filename="$(find fishbot_description)/urdf/fishbot/common_inertia.xacro" />
+    <xacro:macro name="camera_xacro" params="xyz">
+        <link name="camera_link">
+            <visual>
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+                <geometry>
+                    <box size="0.02 0.10 0.02" />
+                </geometry>
+                <material name="black">
+                    <color rgba="0.0 0.0 0.0 0.5" />
+                </material>
+            </visual>
+            <collision>
+                <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+                <geometry>
+                    <box size="0.02 0.10 0.02" />
+                </geometry>
+                <material name="black">
+                    <color rgba="0.0 0.0 0.0 0.5" />
+                </material>
+            </collision>
+            <xacro:box_inertia m="0.1" w="0.02" h="0.10" d="0.02" />
+        </link>
+
+        <link name="camera_optical_link"></link>
+        <joint name="camera_joint" type="fixed">
+            <parent link="base_link" />
+            <child link="camera_link" />
+            <origin xyz="${xyz}" rpy="0.0 0.0 0.0" />
+        </joint>
+
+         <joint name="camera_optical_joint" type="fixed">
+            <parent link="camera_link" />
+            <child link="camera_optical_link" />
+            <origin xyz="0.0 0.0 0.0" rpy="${-pi/2} 0.0 ${-pi/2}" />  这里是绕着固定的父坐标系旋转,而不是自身
+        </joint>
+    </xacro:macro>
+
+```XML
+<gazebo reference="camera_link"> 参考该坐标系
+    <sensor type="depth" name="camera_sensor">
+        <plugin name="depth_camera" filename="libgazebo_ros_camera.so">
+            <frame_name>camera_optical_link</frame_name> 传感器数据供应到这个link上面 发布的坐标系名字
+        </plugin>
+        <always_on>true</always_on>
+        <update_rate>10</update_rate>
+        <camera name="camera">
+            <horizontal_fov>1.5009831567</horizontal_fov> 水平视角配置 
+            <image>
+                <width>800</width>
+                <height>600</height>
+                <format>R8G8B8</format> 相机参数
+            </image>
+            <distortion>  畸变系数
+                <k1>0.0</k1>
+                <k2>0.0</k2>
+                <k3>0.0</k3>
+                <p1>0.0</p1>
+                <p2>0.0</p2>
+                <center>0.5 0.5</center> 图像中心坐标
+            </distortion>
+        </camera>
+    </sensor>
+</gazebo>
+
+```
+
 </robot>
 ```
