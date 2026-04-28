@@ -3023,7 +3023,7 @@ def generate_launch_description():
             <material>Gazebo/Black</material>
         </gazebo>
 ```
-可咨询AI获取详细的关于Gazebo标签的知识    
+可咨询AI获取详细的关于Gazebo标签的知识
 ## 6.4.4 使用两轮差速插件控制机器人
 
 ```XML
@@ -3187,7 +3187,7 @@ def generate_launch_description():
 ```
 ro2 tipic echo /imu --once 可以只查看一次imu输出的值   
 ## 6.4.7 深度相机传感器仿真   
-深度相机默认的前方是Z轴,所以在URDF文件中,需要添加一个虚拟的部件调整方位
+深度相机默认的前方是Z轴,所以在URDF文件中,需要添加一个虚拟的部件调整方位,这里是调整虚拟方位的urdf文件,更改在sensor.urdf.xacro里
 ```XML
 <?xml version="1.0"?>
 <!-- 机器人URDF文件声明 -->
@@ -3203,6 +3203,8 @@ ro2 tipic echo /imu --once 可以只查看一次imu输出的值
                 <material name="black">
                     <color rgba="0.0 0.0 0.0 0.5" />
                 </material>
+            <xacro:box_inertia m="0.1" w="0.02" h="0.10" d="0.02" />
+        </link>
             </visual>
             <collision>
                 <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
@@ -3231,7 +3233,7 @@ ro2 tipic echo /imu --once 可以只查看一次imu输出的值
     </xacro:macro>
 
 ```XML
-<gazebo reference="camera_link"> 参考该坐标系
+<gazebo reference="camera_link"> 参考该坐标系    这里是plugins,更改在gazebo_sensor_plugin.xacro里
     <sensor type="depth" name="camera_sensor">
         <plugin name="depth_camera" filename="libgazebo_ros_camera.so">
             <frame_name>camera_optical_link</frame_name> 传感器数据供应到这个link上面 发布的坐标系名字
@@ -3257,7 +3259,199 @@ ro2 tipic echo /imu --once 可以只查看一次imu输出的值
     </sensor>
 </gazebo>
 
-```
-
 </robot>
 ```
+# 6.5 使用ros2_control驱动机器人   
+ros2_control是使用ros2进行机器人控制的框架,简化硬件的集成.   
+## 6.5.1 ros2_control介绍与安装   
+这部分讲解了插件的模式架构,建议去看原本的视频
+`sudo apt install ros-$ROS_DISTRO-ros2-control`安装该中间层系统,也可以理解为额一个控制框架,里面集成了给gazebo用的接口和给真实的硬件使用的接口   
+`sudo apt info ros-$ROS_DISTRO-ros2-controllers`可以查看ros2中有哪些执行器   
+`ros2 control -h`可以关于该框架的帮助   
+`sudo apt install ros-$ROS_DISTRO-ros2-controllers`可以安装这些执行器到ros2中
+## 6.5.2 使用gazebo介入ros2_control
+`sudo apt install ros-$ROS_DISTRO-gazebo-ros2-control`安装gazebo ros2 control插件  
+```XML
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name="fishbot_ros2_control">
+        <ros2_control name="FishBotGazeboSystem" type="system">
+            <hardware> 设置与硬件相关的配置
+                <plugin>gazebo_ros2_control/GazeboSystem</plugin>   设置硬件驱动库的名字
+            </hardware>
+            <joint name="left_wheel_joint">
+                <command_interface name="velocity"> 命令接口 ,指的是执行器
+                    <param name="min">-1</param>
+                    <param name="max">1</param>
+                </command_interface>
+                <command_interface name="effort">
+                    <param name="min">-0.1</param>
+                    <param name="max">0.1</param>
+                </command_interface>
+                <state_interface name="position" /> 状态接口,关节对外提供的一些状态,相当于传感器,有位置,速度,力矩
+                <state_interface name="velocity" />
+                <state_interface name="effort" />
+            </joint>
+            <joint name="right_wheel_joint">
+                <command_interface name="velocity">
+                    <param name="min">-1</param>
+                    <param name="max">1</param>
+                </command_interface>
+                <command_interface name="effort">
+                    <param name="min">-0.1</param>
+                    <param name="max">0.1</param>
+                </command_interface>
+                <state_interface name="position" />
+                <state_interface name="velocity" />
+                <state_interface name="effort" />
+            </joint>
+        </ros2_control>
+        <gazebo>
+            <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">  
+                <parameters>$(find fishbot_description)/config/fishbot_ros2_controller.yaml</parameters> 这个插件会解析ros2_control标签.用于加载插件去解析ros2_control的配置文件,根据其中内容控制速度,力,获取相关的关节状态
+                <ros> 
+                    <remapping>/fishbot_diff_drive_controller/cmd_vel_unstamped:=/cmd_vel</remapping>
+                    <remapping>/fishbot_diff_drive_controller/odom:=/odom</remapping>
+                </ros>
+            </plugin>
+        </gazebo>
+    </xacro:macro>
+</robot>
+```
+
+```yaml
+controller_manager:
+  ros__parameters:
+    update_rate: 100 # Hz
+    use_sim_time: true
+```
+启动后,可以使用`ros2 control list_controller_types`查看控制器类型,`ros2 control list_hardware_interfaces `列出硬件消息接口,`ros2 control list_hardware_components`列出硬件组成成分等,可以再看一次这一章节,加深理解,主要还是其中的架构需要仔细了解
+
+## 6.5.3 使用关节状态的发布控制器  
+开关状态发布 控制器 不是开关状态 发布控制器    
+
+`ros2 control load_controller fishbot_joint_state_broadcaster --set-state active `激活命令  
+要修改yaml文件,添加控制器    
+还要修改launch文件,把这个激活命令包含进去
+
+```python
+import launch
+import launch_ros
+from ament_index_python.packages import get_package_share_directory
+import os
+
+def generate_launch_description():
+    # Get the path to the robot description package
+    urdf_package_path = get_package_share_directory('fishbot_description')
+    
+    default_xacro_path = os.path.join(urdf_package_path, 'urdf', 'fishbot/fishbot.urdf.xacro')
+    # default_rviz_config_path = os.path.join(urdf_package_path, 'config', 'display_robot_model.rviz')
+    default_gazebo_world_path = os.path.join(urdf_package_path, 'world', 'custom_room.world')
+
+    # 声明一个urdf目录的launch参数,方便修改
+    action_declare_arg_mode_path = launch.actions.DeclareLaunchArgument(
+        name='model',
+        default_value=str(default_xacro_path),
+        description='加载的模型文件路径'
+    )
+
+    # 通过文件路径,获取内容,并转换成参数值对象,以供传入 RobotStatePublisher 节点 substitutions 替换
+    substitutions_command_result = launch.substitutions.Command(['xacro ', launch.substitutions.LaunchConfiguration('model')])
+    #把文本内容封装成ros2节点能识别的参数形式,
+    robot_description_value = launch_ros.parameter_descriptions.ParameterValue(substitutions_command_result, value_type=str) 
+    #启动第一个节点 robot_state_publisher,把上面获取的参数传入,让它发布机器人状态信息,以供rviz显示使用
+    action_robot_state_publisher = launch_ros.actions.Node(
+        package='robot_state_publisher', #功能包名
+        executable='robot_state_publisher', #可执行文件名
+        name='robot_state_publisher', #节点运行时的名字
+        output='screen', #日志打印到终端
+        parameters=[{'robot_description': robot_description_value}] #传入的参数 robot_description是节点要求必须传的参数名,是固定死的
+    )
+    action_launch_gazebo = launch.actions.IncludeLaunchDescription(
+        launch.launch_description_sources.PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory('gazebo_ros'), 'launch', 'gazebo.launch.py')
+        ),
+        launch_arguments=[('world', default_gazebo_world_path), ('verbose', 'true')]
+    )
+
+
+    action_spawn_entity = launch_ros.actions.Node(
+        package='gazebo_ros',
+        executable='spawn_entity.py',
+        arguments=['-topic', 'robot_description', '-entity', 'fishbot'],
+        output='screen'
+    )
+
+    action_load_joint_state_controller = launch.actions.ExecuteProcess(
+        cmd=['ros2', 'control', 'load_controller', 'fishbot_joint_state_broadcaster', '--set-state', 'active'],
+        output='screen'
+    )
+
+    #返回所有启动动作
+    return launch.LaunchDescription([
+        action_declare_arg_mode_path,
+        action_robot_state_publisher,
+        action_launch_gazebo,
+        action_spawn_entity,
+        
+        launch.actions.RegisterEventHandler(
+            event_handler=launch.event_handlers.OnProcessExit(
+                target_action=action_spawn_entity,
+                on_exit=[action_load_joint_state_controller],
+            )
+        ])
+```
+
+可以使用`ros2 control set_controller_state fishbot_joint_state_broadcaster inactive`设置成未激活状态,还能使用`ros2 control unloadcontroller xxx`来卸载该控制器
+## 6.5.4 使用力控制器控制轮子  
+记得配置yaml,还有其声明    
+```YAML
+fishbot_effort_controller:
+  ros__parameters:
+    joints:
+      - left_wheel_joint
+      - right_wheel_joint
+    command_interfaces:
+      - effort
+    state_interfaces:
+      - position
+      - velocity
+      - effort
+不同于控制接口,状态接口是可以被重复使用的
+```
+然后修改launch,就可以了,`ros2 topic pub /fishbot_effort_controller/commands std_msgs/msg/Float64MultiArray "{data: [0.0001,0.0001]}"`这个可以进行话题命令的发布   
+`ros2 control list_hardware_interfaces`可以发现力控接口被占用    
+
+## 6.5.5 使用两轮差速控制器控制机器人   
+配置yaml,还有其声明
+```yaml
+fishbot_diff_drive_controller:
+  ros__parameters: 给ros看的参数
+    left_wheel_names: ["left_wheel_joint"]
+    right_wheel_names: ["right_wheel_joint"]
+
+    wheel_separation: 0.20 轮距
+    #wheels_per_side: 1  # actually 2, but both are controlled by 1 signal
+    wheel_radius: 0.032 轮子半径
+
+    wheel_separation_multiplier: 1.0 调整倍数,不进行校准
+    left_wheel_radius_multiplier: 1.0
+    right_wheel_radius_multiplier: 1.0
+
+    publish_rate: 50.0 发布速率
+    odom_frame_id: odom
+    base_frame_id: base_footprint
+    pose_covariance_diagonal : [0.001, 0.001, 0.0, 0.0, 0.0, 0.01]   两个协方差噪声
+    twist_covariance_diagonal: [0.001, 0.0, 0.0, 0.0, 0.0, 0.01]
+
+    open_loop: true 开环
+    enable_odom_tf: true 是否使能tf发布
+
+    cmd_vel_timeout: 0.5 超时时间
+    #publish_limited_velocity: true
+    use_stamped_vel: false 
+    #velocity_rolling_window_size: 10
+
+```
+然后运行起来后,使用ros2 topic list 可以发现没有fishbot的cel和odom话题,这是因为已经在ros2_control.xacro里进行话题重映射了    
+`ros2 run teleop_twist_keyboard teleop_twist_keyboard` 可以启动键盘控制    
