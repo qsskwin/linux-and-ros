@@ -3025,6 +3025,7 @@ def generate_launch_description():
 ```
 可咨询AI获取详细的关于Gazebo标签的知识
 ## 6.4.4 使用两轮差速插件控制机器人
+这个插件只是给gazebo仿真用的,因此后续会有一个ros2_control框架来连接gazebo,而不是用这个插件,框架可以提供仿真的消息接口,还可以连接真实的物理硬件    
 
 ```XML
 <?xml version="1.0"?>
@@ -3325,7 +3326,8 @@ controller_manager:
     update_rate: 100 # Hz
     use_sim_time: true
 ```
-启动后,可以使用`ros2 control list_controller_types`查看控制器类型,`ros2 control list_hardware_interfaces `列出硬件消息接口,`ros2 control list_hardware_components`列出硬件组成成分等,可以再看一次这一章节,加深理解,主要还是其中的架构需要仔细了解
+启动后,可以使用`ros2 control list_controller_types`查看控制器类型,`ros2 control list_hardware_interfaces `列出硬件消息接口,`ros2 control list_hardware_components`列出硬件组成成分等,可以再看一次这一章节,加深理解,主要还是其中的架构需要仔细了解     
+值得注意的是 yaml文件是专门给ros2_control用的,告诉这个框架要启动哪些控制器工作,而上面的那个xacro文件则是给gazebo用的,把gazebo虚拟仿真与ros2_control这个框架绑定    
 
 ## 6.5.3 使用关节状态的发布控制器  
 开关状态发布 控制器 不是开关状态 发布控制器    
@@ -3389,7 +3391,7 @@ def generate_launch_description():
 
     #返回所有启动动作
     return launch.LaunchDescription([
-        action_declare_arg_mode_path,
+        action_declare_arg_mode_path, 
         action_robot_state_publisher,
         action_launch_gazebo,
         action_spawn_entity,
@@ -3455,3 +3457,253 @@ fishbot_diff_drive_controller:
 ```
 然后运行起来后,使用ros2 topic list 可以发现没有fishbot的cel和odom话题,这是因为已经在ros2_control.xacro里进行话题重映射了    
 `ros2 run teleop_twist_keyboard teleop_twist_keyboard` 可以启动键盘控制    
+
+# 第七章 导航
+**这一章节很有必要再看一遍书或者视频,里面还有CPP实现的过程,需要掌握,最好掌握多种**
+
+# 7.1 机器人导航介绍    
+SLAM：Simultaneous Localization and Mapping 同时定位与地图构建    
+结合特征提取和滤波等算法,来解决机器人的定位和建图问题,有激光slam和视觉slam    
+要找到路径最短,耗时最短,因此需要在地图上标注代价信息.路径规划分为全局路径规划和局部路径规划,全局路径规划指的是从起点到终点的一条全局路线,在运行过程中,有时候会遇到一些动态障碍物,这时候就需要局部的路径规划,绕开这些障碍物.有时候如果被卡住了,则需要进行恢复,这种行为叫做恢复行为,例如被树卡住了,恢复行为就是后退,被人挡住了,恢复行为就是播放语音请人让道   
+  
+# 7.2 使用slam_toolbox完成建图   
+# 7.2.1 构建第一章导航地图    
+`sudo apt install ros-$ROS_DISTRO-slam-toolbox` 安装该工具箱,本质也是一个功能包   
+`cp -r ../../chapt6/chapt6_ws/src/fishbot_description src/`将chapt6下的fishbot复制到当前的src,-r是复制文件夹,不加这个只能复制单个文件,两个点代表上两级目录.    
+`ros2 launch slam_toolbox online_async_launch.py use_sim_time:=True`使用这个命令启动该工具箱   
+然后打开rviz,add map的话题,因为上面哪个工具箱会发布该话题
+`ros2 run teleop_twist_keyboard teleop_twist_keyboard`使用该命令使用键盘控制机器人移动   
+![alt text](assets/README/image-14.png)   
+这张图片则是当前tf tree的结构     
+# 7.2.2 将地图保存为文件     
+
+`sudo apt install ros-$ROS_DISTRO-nav2-map-server`这个工具用于保存地图,安装后可以运行下面这个指令    
+`ros2 run nav2_map_server map_saver_cli -f room` 运行的这个节点会订阅map话题,然后把话题中收到的数据转换成一个文件保存下来,可以看见又一个room.pgm和room.yaml,pgm是一个图片,yaml格式如下:
+
+```yaml
+image: room.pgm
+mode: trinary  表示地图中每个像素点有三种可能,障碍物的占据状态黑色,无障碍的自由状态白色,unknown用灰色表示
+resolution: 0.05 地图的分辨率,表示每个像素对应的物理尺寸为5cm
+origin: [-10.4, -6.53, 0] 地图的坐标原点,单位是m
+negate: 0  是否对地图进行去反
+occupied_thresh: 0.65 
+free_thresh: 0.25   0-0.25为自由状态 大于0.65未障碍物状态 把像素点0-255映射到0-1     
+```
+由于有误差,因此要区分三种状态,而不是占据和自由状态,这样映射可以有一个概率,形成概率分布    
+
+# 7.3 机器人导航框架 Navigation 2  
+## 7.3.1 Navigation2介绍与安装   
+有必要了解清楚Navigation2的实现原理   
+架构信息
+`sudo apt install ros-$ROS_DISTRO-navigation2` 安装该元功能包,跟单个功能包不同,元功能包没有任何代码,而单个功能包是有自己的代码的    
+`sudo apt install ros-$ROS_DISTRO-nav2-bringup`启动示例功能包,这个功能包也是需要安装的,安装后就可以启动示例    
+## 7.3.2 配置Navigation 2参数   
+yaml一般来说是用来存储参数的,例如相机分辨率,帧率等.     
+而urdf一般来说是用来存储机器人结构配置的,如质量,惯性等     
+把nav2_params.yaml里的参数进行配置,把robot_radius改成0.12以适配我们的机器人    
+## 7.3.3 编写launch并启动导航    
+launch如下    
+```python
+import os
+import launch
+import launch_ros
+from ament_index_python.packages import get_package_share_directory
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+
+
+def generate_launch_description():
+    # 获取与拼接默认路径
+    fishbot_navigation2_dir = get_package_share_directory(
+        'fishbot_navigation2')
+    nav2_bringup_dir = get_package_share_directory('nav2_bringup')
+    rviz_config_dir = os.path.join(
+        nav2_bringup_dir, 'rviz', 'nav2_default_view.rviz')
+    
+    # 创建 Launch 配置
+    use_sim_time = launch.substitutions.LaunchConfiguration(
+        'use_sim_time', default='true')
+    map_yaml_path = launch.substitutions.LaunchConfiguration(
+        'map', default=os.path.join(fishbot_navigation2_dir, 'maps', 'room.yaml'))
+    nav2_param_path = launch.substitutions.LaunchConfiguration(
+        'params_file', default=os.path.join(fishbot_navigation2_dir, 'config', 'nav2_params.yaml'))
+
+    return launch.LaunchDescription([
+        # 声明新的 Launch 参数
+        launch.actions.DeclareLaunchArgument('use_sim_time', default_value=use_sim_time,
+                                             description='Use simulation (Gazebo) clock if true'),
+        launch.actions.DeclareLaunchArgument('map', default_value=map_yaml_path,
+                                             description='Full path to map file to load'),
+        launch.actions.DeclareLaunchArgument('params_file', default_value=nav2_param_path,
+                                             description='Full path to param file to load'),
+
+        launch.actions.IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                [nav2_bringup_dir, '/launch', '/bringup_launch.py']),
+            # 使用 Launch 参数替换原有参数
+            launch_arguments={
+                'map': map_yaml_path,
+                'use_sim_time': use_sim_time,
+                'params_file': nav2_param_path}.items(),
+        ),
+        launch_ros.actions.Node(
+            package='rviz2',
+            executable='rviz2',
+            name='rviz2',
+            arguments=['-d', rviz_config_dir],
+            parameters=[{'use_sim_time': use_sim_time}],
+            output='screen'),
+    ])
+```
+## 7.3.4 进行单点与路点导航    
+路点导航就是多条路线,可以按照我们指定的路径顺序进行导航,这几节都建议看原视频,很短     
+## 7.3.5 导航过程中进行动态避障    
+也没啥说的,就是添加障碍物后会进行躲避,会将障碍物添加进代价地图中.个人认为有必要了解的是这个开源的导航框架的具体实现过程,而不是这个应用层,有必要去深入学习.    
+## 7.3.6 优化导航速度和膨胀半径   
+可以修改配置文件中的相关参数来修改机器人的速度,在yaml里的controller.server中修改导航速度,global maps和local map里设置膨胀半径.在inflation_layer里修改
+## 7.3.7 优化机器人的到点精度   
+yaml里配置,general_goal_checker ,xy是当前机器人在x或y方向上是否小于0.25 yaw是朝向角度,小于0.25rad,即为到达,follow path里也有tolerance容忍度,修改即为贴合的更加标准   
+# 7.4 导航应用开发指南   
+## 7.4.1 使用话题初始化机器人位姿  
+使用ros2 node info /amcl 查看节点相关信息,可以发现这个节点订阅了initialpose,这个话题就是用来发布初始位姿的,可以直接向其发送数据,就可以直接进行初始化位置姿态    
+`ros2 topic pub /initialpose geometry_msgs/msg/PoseWithCovarianceStamped "{header: {frame_id: map}}" --once`    
+navigation2中提供了一个nav2_simple commander的python包,它将常用的导航相关的操作封装成相应的类,直接调用即可,就可以不用自己这样写了    
+```python
+from geometry_msgs.msg import PoseStamped
+from nav2_simple_commander.robot_navigator import BasicNavigator
+import rclpy
+
+def main():
+    rclpy.init()
+    nav = BasicNavigator()
+    init_pose = PoseStamped()
+    init_pose.header.frame_id = 'map'
+    init_pose.header.stamp = nav.get_clock().now().to_msg()
+    init_pose.pose.position.x = 0.0
+    init_pose.pose.position.y = 0.0
+    init_pose.pose.orientation.w = 1.0
+    nav.setInitialPose(init_pose)
+    nav.waitUntilNav2Active() #等待导航可用
+    rclpy.spin(nav) 
+    nav.destroy_node()
+    rclpy.shutdown()
+```
+这一部分后续可以考虑加入进launch里,这样就可以一键初始化位姿了    
+## 7.4.2 使用TF获取机器人实时位置   
+```python
+import rclpy
+from rclpy.node import Node
+from tf2_ros import TransformListener,Buffer  #动态坐标发布器
+from tf_transformations import euler_from_quaternion #四元数转欧拉角
+import math #角度转弧度
+
+class TFListener(Node):
+    def __init__(self):
+        super().__init__('tf_listener')
+        self.buffer = Buffer()
+        self.listener = TransformListener(self.buffer,self) #创建缓冲区
+        self.timer = self.create_timer(1.0, self.get_transform) #每隔1秒查询一次坐标关系
+    def get_transform(self):
+        """定时查询坐标关系"""
+        try:
+            #查询坐标关系，父坐标系为camera_link，子坐标系为bottle_link
+            result = self.buffer.lookup_transform('map','base_footprint',rclpy.time.Time(seconds = 0),rclpy.time.Duration(seconds = 1.0)) 
+            # 第三个参数为时间戳，使用当前时间 
+            transform = result.transform
+                #旋转，四元数转欧拉角
+            self.get_logger().info(f'平移{result.transform.translation}')
+            self.get_logger().info(f'旋转四元数{result.transform.rotation}')
+            self.get_logger().info(f'旋转欧拉角{euler_from_quaternion([result.transform.rotation.x,result.transform.rotation.y,result.transform.rotation.z,result.transform.rotation.w])}')
+        except Exception as e:
+            self.get_logger().warn(f'Failed to lookup transform, reason: {str(e)}')
+def main():
+    rclpy.init()
+    node = TFListener()
+    rclpy.spin(node)
+    rclpy.shutdown()
+        
+
+```
+
+## 7.4.3 调用接口进行单点导航   
+要用到动作通信,使用ros2 action list -t 可以看见有一个/navigate_to_pose 这个服务.也有消息接口,查看消息接口内容可以看见三个部分,第一个部分是goal,表示目标,第二个部分是结果定义,最后一个是feedback反馈,包括总共导航花费的时间,剩余还需要的时间,当前的实时位置,剩余的距离,恢复行为的发生次数等.    
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "{pose: {header: {frame_id: map}, pose: {position:{x: 2.0, y: 1.0}}}}" --feedback 表示显示反馈的内容    
+除此之外,当然也可以用代码来完成这种任务要求
+```python
+from geometry_msgs.msg import PoseStamped
+from nav2_simple_commander.robot_navigator import BasicNavigator #这里面封装了有关action通信的函数
+import rclpy
+
+def main():
+    rclpy.init()
+    nav = BasicNavigator()
+    nav.waitUntilNav2Active() #等待导航可用
+    goal_pose = PoseStamped()
+    goal_pose.header.frame_id = 'map'
+    goal_pose.header.stamp = nav.get_clock().now().to_msg()
+    goal_pose.pose.position.x = 2.0
+    goal_pose.pose.position.y = 1.0
+    goal_pose.pose.orientation.w = 1.0
+    nav.goToPose(goal_pose) 
+    while nav.isTaskComplete() == False: #等待导航完成
+        feedback = nav.getFeedback()
+        nav.get_logger().info(f'导航反馈: {feedback.distance_remaining:.2f} m')
+        #nav.cancelTask() #取消导航
+    result = nav.getResult()
+    nav.get_logger().info(f'导航结果: {result}')    
+    # rclpy.spin(nav) 
+    # nav.destroy_node()
+    # rclpy.shutdown() 这三句可以不要,在gotopose里是有异步线程的,节点会一直运行,直到导航完成后才会销毁节点和关闭rclpy
+
+
+    
+```
+## 7.4.4 使用接口完成路点导航
+主要使用 ros2 action info /follow_waypoints 
+```python
+from geometry_msgs.msg import PoseStamped
+from nav2_simple_commander.robot_navigator import BasicNavigator #这里面封装了有关action通信的函数
+import rclpy
+
+def main():
+    rclpy.init()
+    nav = BasicNavigator()
+    nav.waitUntilNav2Active() #等待导航可用
+    goal_poses = []
+    goal_pose = PoseStamped()
+    goal_pose.header.frame_id = 'map'
+    goal_pose.header.stamp = nav.get_clock().now().to_msg()
+    goal_pose.pose.position.x = 2.0
+    goal_pose.pose.position.y = 1.0
+    goal_pose.pose.orientation.w = 1.0
+    goal_poses.append(goal_pose)
+
+    goal_pose1 = PoseStamped()
+    goal_pose1.header.frame_id = 'map'
+    goal_pose1.header.stamp = nav.get_clock().now().to_msg()
+    goal_pose1.pose.position.x = 0.0
+    goal_pose1.pose.position.y = 1.0
+    goal_pose1.pose.orientation.w = 1.0
+    goal_poses.append(goal_pose1)
+
+    goal_pose2 = PoseStamped()
+    goal_pose2.header.frame_id = 'map'
+    goal_pose2.header.stamp = nav.get_clock().now().to_msg()
+    goal_pose2.pose.position.x = 0.0
+    goal_pose2.pose.position.y = 0.0
+    goal_pose2.pose.orientation.w = 1.0
+    goal_poses.append(goal_pose2)
+
+
+    nav.followWaypoints(goal_poses) 
+    while nav.isTaskComplete() == False: #等待导航完成
+        feedback = nav.getFeedback()
+        nav.get_logger().info(f'导航反馈: {feedback.current_waypoint}')
+        #nav.cancelTask() #取消导航
+    result = nav.getResult()
+    nav.get_logger().info(f'导航结果: {result}')    
+    # rclpy.spin(nav) 
+    # nav.destroy_node()
+    # rclpy.shutdown() 这三句可以不要,在gotopose里是有异步线程的,节点会一直运行,直到导航完成后才会销毁节点和关闭rclpy
+
+
+```
