@@ -3263,7 +3263,8 @@ ro2 tipic echo /imu --once 可以只查看一次imu输出的值
 </robot>
 ```
 # 6.5 使用ros2_control驱动机器人   
-ros2_control是使用ros2进行机器人控制的框架,简化硬件的集成.   
+ros2_control是使用ros2进行机器人控制的框架,简化硬件的集成.  
+![alt text](assets/README/6d6e630afcb696e906098ff5920182cd.png)
 ## 6.5.1 ros2_control介绍与安装   
 这部分讲解了插件的模式架构,建议去看原本的视频
 `sudo apt install ros-$ROS_DISTRO-ros2-control`安装该中间层系统,也可以理解为额一个控制框架,里面集成了给gazebo用的接口和给真实的硬件使用的接口   
@@ -3465,7 +3466,9 @@ fishbot_diff_drive_controller:
 SLAM：Simultaneous Localization and Mapping 同时定位与地图构建    
 结合特征提取和滤波等算法,来解决机器人的定位和建图问题,有激光slam和视觉slam    
 要找到路径最短,耗时最短,因此需要在地图上标注代价信息.路径规划分为全局路径规划和局部路径规划,全局路径规划指的是从起点到终点的一条全局路线,在运行过程中,有时候会遇到一些动态障碍物,这时候就需要局部的路径规划,绕开这些障碍物.有时候如果被卡住了,则需要进行恢复,这种行为叫做恢复行为,例如被树卡住了,恢复行为就是后退,被人挡住了,恢复行为就是播放语音请人让道   
-  
+  ![alt text](assets/README/75fa909d71189b526a27814ca4e0c6f4.png)
+  导航的架构    
+
 # 7.2 使用slam_toolbox完成建图   
 # 7.2.1 构建第一章导航地图    
 `sudo apt install ros-$ROS_DISTRO-slam-toolbox` 安装该工具箱,本质也是一个功能包   
@@ -3707,3 +3710,6 @@ def main():
 
 
 ```
+# 7.5 机器人系统架构设计
+![alt text](assets/README/616e05c744b90f9e056b4441328bccd1.png)
+
