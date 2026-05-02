@@ -3710,6 +3710,464 @@ def main():
 
 
 ```
-# 7.5 机器人系统架构设计
-![alt text](assets/README/616e05c744b90f9e056b4441328bccd1.png)
+# 7.5 导航最佳实践:自动巡检机器人
+## 7.5.1 机器人系统架构设计
+![alt text](assets/README/616e05c744b90f9e056b4441328bccd1.png)  
+## 7.5.2 编写巡检控制节点   
 
+```python 
+import rclpy
+from geometry_msgs.msg import PoseStamped,Pose
+from nav2_simple_commander.robot_navigator import BasicNavigator,TaskResult #这里面封装了有关action通信的函数
+from rclpy.node import Node
+from tf2_ros import TransformListener,Buffer  #动态坐标发布器
+from tf_transformations import euler_from_quaternion,quaternion_from_euler#四元数转欧拉角
+import math #角度转弧度
+import rclpy.time
+
+
+class PartrolNode(BasicNavigator):
+    def __init__(self,node_name='patrol_node'):
+        super().__init__(node_name)
+    # 声明相关参数
+        self.declare_parameter('initial_point', [0.0, 0.0, 0.0]) #初始点，格式为[x, y, yaw]
+        self.declare_parameter('target_points', [0.0, 0.0, 0.0, 1.0, 1.0, 1.57]) #巡逻点列表，格式为[[x1, y1, yaw1], [x2, y2, yaw2], ...]
+        self.initial_point = self.get_parameter('initial_point').value
+        self.target_points = self.get_parameter('target_points').value
+        self.buffer = Buffer()
+        self.listener = TransformListener(self.buffer,self) #创建tf监听器
+
+    def get_pose_by_xyyaw(self,x,y,yaw):
+        """根据x,y,yaw构造PoseStamped消息"""
+        pose = PoseStamped()
+        pose.header.frame_id = 'map'
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        # 将四元数转欧拉
+        quat = quaternion_from_euler(0, 0, yaw)
+        pose.pose.orientation.x = quat[0]
+        pose.pose.orientation.y = quat[1]
+        pose.pose.orientation.z = quat[2]
+        pose.pose.orientation.w = quat[3]
+        return pose
+
+    def init_robot_pose(self):
+        """设置机器人初始位姿"""
+        self.initial_point = self.get_parameter('initial_point').value
+        init_pose = self.get_pose_by_xyyaw(self.initial_point[0], self.initial_point[1], self.initial_point[2])
+        self.setInitialPose(init_pose)
+        self.waitUntilNav2Active() #等待导航可用
+
+    def get_target_points(self):
+        """获取巡逻点列表"""
+        points = []
+        for index in range(int(len(self.target_points) / 3)):
+            x = self.target_points[index * 3]
+            y = self.target_points[index * 3 + 1]
+            yaw = self.target_points[index * 3 + 2]
+            points.append([x, y, yaw])
+            self.get_logger().info(f'巡逻点{index + 1}: x={x}, y={y}, yaw={yaw}')
+        return points
+
+    def nav_to_pose(self,target_point):
+        """导航到指定位姿"""
+        self.goToPose(target_point) 
+        while self.isTaskComplete() == False: #等待导航完成
+            feedback = self.getFeedback()
+            self.get_logger().info(f'导航反馈: {feedback.distance_remaining:.2f} m')
+        result = self.getResult()
+        self.get_logger().info(f'导航结果: {result}')    
+        return result
+    
+    def get_current_pose(self):
+        """获取机器人当前位姿"""
+        while rclpy.ok():
+            try:
+                #查询坐标关系，父坐标系为camera_link，子坐标系为bottle_link
+                result = self.buffer.lookup_transform('map','base_footprint',rclpy.time.Time(seconds = 0),rclpy.time.Duration(seconds = 1.0)) 
+                # 第三个参数为时间戳，使用当前时间 
+                transform = result.transform
+                    #旋转，四元数转欧拉角
+                self.get_logger().info(f'平移{transform.translation}')              
+                return transform
+            except Exception as e:
+                self.get_logger().warn(f'Failed to lookup transform, reason: {str(e)}')
+            
+    
+
+
+def main():
+    rclpy.init()
+    patrol = PartrolNode()
+    patrol.init_robot_pose()
+
+    while rclpy.ok():
+        points = patrol.get_target_points()
+        for point in points:
+            x,y,yaw = point[0], point[1], point[2]
+            target_pose = patrol.get_pose_by_xyyaw(x, y, yaw)
+            result = patrol.nav_to_pose(target_pose)
+    # rclpy.spin(nav) 
+    # nav.destroy_node()
+    # rclpy.shutdown() 这三句可以不要,在gotopose里是有异步线程的,节点会一直运行,直到导航完成后才会销毁节点和关闭rclpy
+
+
+    
+```
+
+写完之后因为要使用命令行直接加载参数,参数写在config下的yaml文件里,格式如下:
+```yaml
+/patrol_node:
+  ros__parameters:
+    initial_point: [0.0, 0.0, 0.0]
+
+    target_points: [
+      0.0, 0.0, 0.0,
+      1.0, 2.0, 3.14,
+      -4.5, 1.5, 1.57,
+      -8.0, -5.0, 1.57,
+      1.0, -5.0, 3.14]
+
+    use_sim_time: false
+```
+也可以通过ros param dump /partol_node 将该节点的参数给直接显示出来,然后复制进yaml文件里修改即可    
+初始点不传多维数组的原因则是因为ros2只支持一维数组  
+
+## 7.5.3 添加语音播报功能   
+首先创建新的接口类型,大概流程就是创建新的功能包,然后srv的类型,写入反馈和结果,再添加进package.xml   
+这样就做好了前期的准备工作
+
+```python
+import rclpy
+from rclpy.node import Node
+from autopatrol_interfaces.srv import SpeechText  # 导入自定义服务类型
+import espeakng  # 导入espeak-ng库
+
+class SpeakerNode(Node):
+    def __init__(self):
+        super().__init__('speaker')
+        self.speech_service = self.create_service(SpeechText, 'speech_text', self.speech_text_callback)  # 创建服务
+        self.get_logger().info('SpeakerNode is ready to receive requests.')
+        self.speaker = espeakng.Speaker()  # 初始化espeak-ng对象
+        self.speaker.voice = 'zh'  # 设置语音为英语
+
+
+    def speech_text_callback(self, request, response):
+        text_to_speak = request.text  # 获取请求中的文本
+        self.get_logger().info(f'Received text to speak: "{text_to_speak}"')
+        
+        # 使用espeak-ng库进行文本转语音
+        self.speaker.say(text_to_speak)  # 将文本转换为语音并播放   
+        self.speaker.wait() # 等待语音播放完成
+        response.result = True  # 设置响应结果
+        return response
+    
+def main():
+    rclpy.init()
+    speaker_node = SpeakerNode()
+    rclpy.spin(speaker_node)  # 保持节点运行
+    speaker_node.destroy_node()
+    rclpy.shutdown()
+```
+写完后添加进setup.py,然后运行该节点进行测试,再新开一个终端输入 ros2 service call /speech_text autopatrol_interfaces/srv/SpeechText {text :鱼香肉丝}  就可以测试是否正确   
+
+完全写好之后,就可以在patrol_node这个节点里写客户端的代码了,代码如下:
+
+```python
+import rclpy
+from geometry_msgs.msg import PoseStamped,Pose
+from nav2_simple_commander.robot_navigator import BasicNavigator,TaskResult #这里面封装了有关action通信的函数
+from rclpy.node import Node
+from tf2_ros import TransformListener,Buffer  #动态坐标发布器
+from tf_transformations import euler_from_quaternion,quaternion_from_euler#四元数转欧拉角
+import math #角度转弧度
+import rclpy.time
+from autopatrol_interfaces.srv import SpeechText #导入自定义服务类型
+
+
+class PartrolNode(BasicNavigator):
+    def __init__(self,node_name='patrol_node'):
+        super().__init__(node_name)
+    # 声明相关参数
+        self.declare_parameter('initial_point', [0.0, 0.0, 0.0]) #初始点，格式为[x, y, yaw]
+        self.declare_parameter('target_points', [0.0, 0.0, 0.0, 1.0, 1.0, 1.57]) #巡逻点列表，格式为[[x1, y1, yaw1], [x2, y2, yaw2], ...]
+        self.initial_point = self.get_parameter('initial_point').value
+        self.target_points = self.get_parameter('target_points').value
+        self.buffer = Buffer()
+        self.listener = TransformListener(self.buffer,self) #创建tf监听器
+        self.speech_client = self.create_client(SpeechText, 'speech_text') #创建说话服务客户端
+    def get_pose_by_xyyaw(self,x,y,yaw):
+        """根据x,y,yaw构造PoseStamped消息"""
+        pose = PoseStamped()
+        pose.header.frame_id = 'map'
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        # 将四元数转欧拉
+        quat = quaternion_from_euler(0, 0, yaw)
+        pose.pose.orientation.x = quat[0]
+        pose.pose.orientation.y = quat[1]
+        pose.pose.orientation.z = quat[2]
+        pose.pose.orientation.w = quat[3]
+        return pose
+
+    def init_robot_pose(self):
+        """设置机器人初始位姿"""
+        self.initial_point = self.get_parameter('initial_point').value
+        init_pose = self.get_pose_by_xyyaw(self.initial_point[0], self.initial_point[1], self.initial_point[2])
+        self.setInitialPose(init_pose)
+        self.waitUntilNav2Active() #等待导航可用
+
+    def get_target_points(self):
+        """获取巡逻点列表"""
+        points = []
+        for index in range(int(len(self.target_points) / 3)):
+            x = self.target_points[index * 3]
+            y = self.target_points[index * 3 + 1]
+            yaw = self.target_points[index * 3 + 2]
+            points.append([x, y, yaw])
+            self.get_logger().info(f'巡逻点{index + 1}: x={x}, y={y}, yaw={yaw}')
+        return points
+
+    def nav_to_pose(self,target_point):
+        """导航到指定位姿"""
+        self.goToPose(target_point) 
+        while self.isTaskComplete() == False: #等待导航完成
+            feedback = self.getFeedback()
+            self.get_logger().info(f'导航反馈: {feedback.distance_remaining:.2f} m')
+        result = self.getResult()
+        self.get_logger().info(f'导航结果: {result}')    
+        return result
+    
+    def get_current_pose(self):
+        """获取机器人当前位姿"""
+        while rclpy.ok():
+            try:
+                #查询坐标关系，父坐标系为camera_link，子坐标系为bottle_link
+                result = self.buffer.lookup_transform('map','base_footprint',rclpy.time.Time(seconds = 0),rclpy.time.Duration(seconds = 1.0)) 
+                # 第三个参数为时间戳，使用当前时间 
+                transform = result.transform
+                    #旋转，四元数转欧拉角
+                self.get_logger().info(f'平移{transform.translation}')              
+                return transform
+            except Exception as e:
+                self.get_logger().warn(f'Failed to lookup transform, reason: {str(e)}')
+            
+    def speech_text(self,text):
+        """调用说话服务"""
+        while not self.speech_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for speech service...')
+        request = SpeechText.Request()
+        request.text = text
+        future = self.speech_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+        if future.result() is not None:
+            self.get_logger().info(f'Speech service response: {future.result().result}')
+        else:
+            self.get_logger().error(f'Failed to call speech service: {future.exception()}')
+
+
+def main():
+    rclpy.init()
+    patrol = PartrolNode()
+    patrol.speech_text("正在准备初始化位置") # 启动时说话
+    patrol.init_robot_pose()
+    patrol.speech_text("初始化完成，开始巡逻") # 初始化完成后说话
+    while rclpy.ok():
+        points = patrol.get_target_points()
+        for point in points:
+            x,y,yaw = point[0], point[1], point[2]
+            target_pose = patrol.get_pose_by_xyyaw(x, y, yaw)
+            patrol.speech_text(f"正在前往巡逻点: x={x}, y={y}, yaw={yaw}") # 前往巡逻点时说话
+            result = patrol.nav_to_pose(target_pose)
+    # rclpy.spin(nav) 
+    # nav.destroy_node()
+    # rclpy.shutdown() 这三句可以不要,在gotopose里是有异步线程的,节点会一直运行,直到导航完成后才会销毁节点和关闭rclpy
+
+
+    
+```
+然后可以把这两个节点的启动写成一个launch,launch的写法如下:
+
+```python
+import launch
+import launch_ros
+from ament_index_python.packages import get_package_share_directory
+import os
+
+def generate_launch_description():
+    # Get the path to the robot description package
+    autopatrol_robot_path = get_package_share_directory('autopatrol_robot')
+    default_patrol_config_path = os.path.join(autopatrol_robot_path,'config', 'patrol_config.yaml')
+    action_patrol_node = launch_ros.actions.Node(
+        package='autopatrol_robot',
+        executable='patrol_node',
+        name='patrol_node',
+        output='screen',
+        parameters=[default_patrol_config_path]
+    )
+
+    action_speaker_node = launch_ros.actions.Node(
+        package='autopatrol_robot',
+        executable='speaker_node',
+        name='speaker_node',
+        output='screen'
+    )
+
+    #返回所有启动动作
+    return launch.LaunchDescription([
+        action_speaker_node
+        ,action_patrol_node
+        ])
+```
+说实话只能多写launch多练,写少了就是看不明白    
+写完了之后在setup.py下引入glob头文件,然后加路径,把launch全部拷贝过去   
+## 7.5.4 订阅图像并进行记录   
+到达目标点时,用摄像头拍摄实时图像并保存到本地   
+图像记录如下:
+```python
+import rclpy
+from geometry_msgs.msg import PoseStamped,Pose
+from nav2_simple_commander.robot_navigator import BasicNavigator,TaskResult #这里面封装了有关action通信的函数
+from rclpy.node import Node
+from tf2_ros import TransformListener,Buffer  #动态坐标发布器
+from tf_transformations import euler_from_quaternion,quaternion_from_euler#四元数转欧拉角
+import math #角度转弧度
+import rclpy.time
+from autopatrol_interfaces.srv import SpeechText #导入自定义服务类型
+from sensor_msgs.msg import Image #ROS图像消息接口类型
+from cv_bridge import CvBridge #ROS图像消息与OpenCV图像之间的转换工具
+import cv2 #OpenCV库，用于图像处理,保存图像
+
+
+class PartrolNode(BasicNavigator):
+    def __init__(self,node_name='patrol_node'):
+        super().__init__(node_name)
+    # 声明相关参数
+        self.declare_parameter('initial_point', [0.0, 0.0, 0.0]) #初始点，格式为[x, y, yaw]
+        self.declare_parameter('target_points', [0.0, 0.0, 0.0, 1.0, 1.0, 1.57]) #巡逻点列表，格式为[[x1, y1, yaw1], [x2, y2, yaw2], ...]
+        self.declare_parameter('img_save_path', '') #图像保存路径参数,如果为空字符串则保存到当前的相对目录
+        self.initial_point = self.get_parameter('initial_point').value
+        self.target_points = self.get_parameter('target_points').value
+        self.img_save_path = self.get_parameter('img_save_path').value
+        self.buffer = Buffer()
+        self.listener = TransformListener(self.buffer,self) #创建tf监听器
+        self.speech_client = self.create_client(SpeechText, 'speech_text') #创建说话服务客户端
+        self.cv_bridge = CvBridge() #创建CvBridge对象用于图像转换
+        self.latest_img = None #用于存储最新的图像数据
+        self.img_sub = self.create_subscription(Image, '/camera_sensor/image_raw', self.image_callback, 1) #订阅相机图像话题
+
+    def image_callback(self, msg):
+        self.latest_img = msg #更新最新的图像数据
+        # 将ROS图像消息转换为OpenCV图像
+    def record_image(self):
+        if self.latest_img is not None:
+            pose = self.get_current_pose() #获取当前位姿
+            cv_image = self.cv_bridge.imgmsg_to_cv2(self.latest_img) #转换为OpenCV图像
+            cv2.imwrite(
+                f'{self.img_save_path}image_{pose.translation.x:.2f}_{pose.translation.y:.2f}.png', #因为path是空,image前面不需要/ 不然无法保存 
+                  cv_image) #保存图像，文件名包含位置信息
+
+        else:
+            self.get_logger().warn('No image received yet, cannot save.')
+
+    def get_pose_by_xyyaw(self,x,y,yaw):
+        """根据x,y,yaw构造PoseStamped消息"""
+        pose = PoseStamped()
+        pose.header.frame_id = 'map'
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        # 将四元数转欧拉
+        quat = quaternion_from_euler(0, 0, yaw)
+        pose.pose.orientation.x = quat[0]
+        pose.pose.orientation.y = quat[1]
+        pose.pose.orientation.z = quat[2]
+        pose.pose.orientation.w = quat[3]
+        return pose
+
+    def init_robot_pose(self):
+        """设置机器人初始位姿"""
+        self.initial_point = self.get_parameter('initial_point').value
+        init_pose = self.get_pose_by_xyyaw(self.initial_point[0], self.initial_point[1], self.initial_point[2])
+        self.setInitialPose(init_pose)
+        self.waitUntilNav2Active() #等待导航可用
+
+    def get_target_points(self):
+        """获取巡逻点列表"""
+        points = []
+        for index in range(int(len(self.target_points) / 3)):
+            x = self.target_points[index * 3]
+            y = self.target_points[index * 3 + 1]
+            yaw = self.target_points[index * 3 + 2]
+            points.append([x, y, yaw])
+            self.get_logger().info(f'巡逻点{index + 1}: x={x}, y={y}, yaw={yaw}')
+        return points
+
+    def nav_to_pose(self,target_point):
+        """导航到指定位姿"""
+        self.goToPose(target_point) 
+        while self.isTaskComplete() == False: #等待导航完成
+            feedback = self.getFeedback()
+            self.get_logger().info(f'导航反馈: {feedback.distance_remaining:.2f} m')
+        result = self.getResult()
+        self.get_logger().info(f'导航结果: {result}')    
+        return result
+    
+    def get_current_pose(self):
+        """获取机器人当前位姿"""
+        while rclpy.ok():
+            try:
+                #查询坐标关系，父坐标系为camera_link，子坐标系为bottle_link
+                result = self.buffer.lookup_transform('map','base_footprint',rclpy.time.Time(seconds = 0),rclpy.time.Duration(seconds = 1.0)) 
+                # 第三个参数为时间戳，使用当前时间 
+                transform = result.transform
+                    #旋转，四元数转欧拉角
+                self.get_logger().info(f'平移{transform.translation}')              
+                return transform
+            except Exception as e:
+                self.get_logger().warn(f'Failed to lookup transform, reason: {str(e)}')
+            
+    def speech_text(self,text):
+        """调用说话服务"""
+        while not self.speech_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for speech service...')
+        request = SpeechText.Request()
+        request.text = text
+        future = self.speech_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+        if future.result() is not None:
+            self.get_logger().info(f'Speech service response: {future.result().result}')
+        else:
+            self.get_logger().error(f'Failed to call speech service: {future.exception()}')
+
+
+def main():
+    rclpy.init()
+    patrol = PartrolNode()
+    patrol.speech_text("正在准备初始化位置") # 启动时说话
+    patrol.init_robot_pose()
+    patrol.speech_text("初始化完成，开始巡逻") # 初始化完成后说话
+    while rclpy.ok():
+        points = patrol.get_target_points()
+        for point in points:
+            x,y,yaw = point[0], point[1], point[2]
+            target_pose = patrol.get_pose_by_xyyaw(x, y, yaw)
+            patrol.speech_text(f"正在前往巡逻点: x={x}, y={y}, yaw={yaw}") # 前往巡逻点时说话
+            patrol.nav_to_pose(target_pose)
+            patrol.speech_text(f"已到达巡逻点: x={x}, y={y}, yaw={yaw}") # 到达巡逻点时说话
+            patrol.record_image() #记录图像
+            patrol.speech_text(f"图像记录完成") # 离开巡逻点时说话
+
+    # rclpy.spin(nav) 
+    # nav.destroy_node()
+    # rclpy.shutdown() 这三句可以不要,在gotopose里是有异步线程的,节点会一直运行,直到导航完成后才会销毁节点和关闭rclpy
+
+
+    
+```
+
+# 7.6 Git仓库托管   
+## 添加自描述文件  
+自描述文件名一般就叫做README.md 没啥说的,教学怎么使用markdown   
