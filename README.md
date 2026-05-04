@@ -4760,5 +4760,437 @@ PLUGINLIB_EXPORT_CLASS(nav2_custom_planner::CustomPlanner,
 
 
 ## 8.3.2 搭建控制器插件框架  
+新建功能包等流程与规划器相同,只叙述关键代码:
+这是custom_controller.hpp文件:   
+```cpp
+#ifndef NAV2_CUSTOM_CONTROLLER__NAV2_CUSTOM_CONTROLLER_HPP_
+#define NAV2_CUSTOM_CONTROLLER__NAV2_CUSTOM_CONTROLLER_HPP_
+
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "nav2_core/controller.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "nav2_util/robot_utils.hpp"
 
 
+namespace nav2_custom_controller {
+
+class CustomController : public nav2_core::Controller {
+public:
+  CustomController() = default;
+  ~CustomController() override = default;
+  void configure(
+      const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent, std::string name,
+      std::shared_ptr<tf2_ros::Buffer> tf,
+      std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) override;
+  void cleanup() override;
+  void activate() override;
+  void deactivate() override;
+  geometry_msgs::msg::TwistStamped
+  computeVelocityCommands(const geometry_msgs::msg::PoseStamped &pose,
+                          const geometry_msgs::msg::Twist &velocity,
+                          nav2_core::GoalChecker * goal_checker) override;
+  void setPlan(const nav_msgs::msg::Path &path) override;
+  void setSpeedLimit(const double &speed_limit,
+                     const bool &percentage) override;
+
+protected:
+  // 存储插件名称
+  std::string plugin_name_;
+  // 存储坐标变换缓存指针，可用于查询坐标关系
+  std::shared_ptr<tf2_ros::Buffer> tf_;
+  // 存储代价地图
+  std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
+  // 存储节点指针
+  nav2_util::LifecycleNode::SharedPtr node_;
+  // 存储全局代价地图
+  nav2_costmap_2d::Costmap2D *costmap_;
+  // 存储 setPlan 提供的全局路径
+  nav_msgs::msg::Path global_plan_;
+  // 参数：最大线速度角速度
+  double max_angular_speed_;
+  double max_linear_speed_;
+
+  // 获取路径中距离当前点最近的点
+  geometry_msgs::msg::PoseStamped
+  getNearestTargetPose(const geometry_msgs::msg::PoseStamped &current_pose);
+  // 计算目标点方向和当前朝向的角度差
+  double
+  calculateAngleDifference(const geometry_msgs::msg::PoseStamped &current_pose,
+                           const geometry_msgs::msg::PoseStamped &target_pose);
+};
+
+} // namespace nav2_custom_controller
+
+#endif // NAV2_CUSTOM_CONTROLLER__NAV2_CUSTOM_CONTROLLER_HPP_
+```
+cpp代码:  
+```cpp
+#include "nav2_custom_controller/custom_controller.hpp"
+#include "nav2_core/exceptions.hpp"
+#include "nav2_util/geometry_utils.hpp"
+#include "nav2_util/node_utils.hpp"
+#include <algorithm>
+#include <chrono>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <thread>
+
+namespace nav2_custom_controller {
+void CustomController::configure(
+    const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent, std::string name,
+    std::shared_ptr<tf2_ros::Buffer> tf,
+    std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) {
+  node_ = parent.lock();
+  costmap_ros_ = costmap_ros;
+  tf_ = tf;
+  plugin_name_ = name;
+
+  // 声明并获取参数，设置最大线速度和最大角速度
+  nav2_util::declare_parameter_if_not_declared(
+      node_, plugin_name_ + ".max_linear_speed", rclcpp::ParameterValue(0.1));
+  node_->get_parameter(plugin_name_ + ".max_linear_speed", max_linear_speed_);
+  nav2_util::declare_parameter_if_not_declared(
+      node_, plugin_name_ + ".max_angular_speed", rclcpp::ParameterValue(1.0));
+  node_->get_parameter(plugin_name_ + ".max_angular_speed", max_angular_speed_);
+}
+
+void CustomController::cleanup() {
+  RCLCPP_INFO(node_->get_logger(),
+              "清理控制器：%s 类型为 nav2_custom_controller::CustomController",
+              plugin_name_.c_str());
+}
+
+void CustomController::activate() {
+  RCLCPP_INFO(node_->get_logger(),
+              "激活控制器：%s 类型为 nav2_custom_controller::CustomController",
+              plugin_name_.c_str());
+}
+
+void CustomController::deactivate() {
+  RCLCPP_INFO(node_->get_logger(),
+              "停用控制器：%s 类型为 nav2_custom_controller::CustomController",
+              plugin_name_.c_str());
+}
+
+geometry_msgs::msg::TwistStamped CustomController::computeVelocityCommands(
+    const geometry_msgs::msg::PoseStamped &pose,
+    const geometry_msgs::msg::Twist &, nav2_core::GoalChecker *) {
+    // 1. 检查路径是否为空
+  if (global_plan_.poses.empty()) {
+    throw nav2_core::PlannerException("收到长度为零的路径");
+  }
+
+  // 2.将机器人当前姿态转换到全局计划坐标系中
+  geometry_msgs::msg::PoseStamped pose_in_globalframe;
+  if (!nav2_util::transformPoseInTargetFrame(
+          pose, pose_in_globalframe, *tf_, global_plan_.header.frame_id, 0.1)) {
+    throw nav2_core::PlannerException("无法将机器人姿态转换为全局计划的坐标系");
+  }
+
+  // 3.获取最近的目标点和计算角度差
+  auto target_pose = getNearestTargetPose(pose_in_globalframe);
+  auto angle_diff = calculateAngleDifference(pose_in_globalframe, target_pose);
+
+  // 4.根据角度差计算线速度和角速度
+  geometry_msgs::msg::TwistStamped cmd_vel;
+
+  return cmd_vel;
+}
+
+void CustomController::setSpeedLimit(const double &speed_limit,
+                                     const bool &percentage) {
+  (void)percentage;
+  (void)speed_limit;
+}
+
+void CustomController::setPlan(const nav_msgs::msg::Path &path) {
+  global_plan_ = path;
+}
+
+geometry_msgs::msg::PoseStamped CustomController::getNearestTargetPose(
+    const geometry_msgs::msg::PoseStamped &current_pose) {
+    
+        return current_pose;
+}
+
+double CustomController::calculateAngleDifference(
+    const geometry_msgs::msg::PoseStamped &current_pose,
+    const geometry_msgs::msg::PoseStamped &target_pose) {
+ // 计算当前姿态与目标姿态之间的角度差
+  // 1. 获取当前角度
+  float current_robot_yaw = tf2::getYaw(current_pose.pose.orientation);
+  // 2.获取目标点朝向
+  float target_angle =
+      std::atan2(target_pose.pose.position.y - current_pose.pose.position.y,
+                 target_pose.pose.position.x - current_pose.pose.position.x);
+  // 3.计算角度差，并转换到 -M_PI 到 M_PI 之间
+  double angle_diff = target_angle - current_robot_yaw;
+  if (angle_diff < -M_PI) {
+    angle_diff += 2.0 * M_PI;
+  } else if (angle_diff > M_PI) {
+    angle_diff -= 2.0 * M_PI;
+  }
+  return 0.0f;
+}
+} // namespace nav2_custom_controller
+
+#include "pluginlib/class_list_macros.hpp"
+PLUGINLIB_EXPORT_CLASS(nav2_custom_controller::CustomController,nav2_core::Controller)
+```
+
+完成后,再新建插件的xml描述文件.  
+```xml
+<class_libraries>
+    <library path="nav2_custom_controller_plugin">
+        <class type="nav2_custom_controller::CustomController" base_class_type="nav2_core::Controller">   //没写name,后续在yaml里直接用接口名就行
+            <description>
+                自定义导航控制器
+            </description>
+        </class>
+    </library>
+</class_libraries>
+```
+然后再修改cmakelist
+```cpp
+cmake_minimum_required(VERSION 3.8)
+project(nav2_custom_controller)
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# find dependencies
+find_package(ament_cmake REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(nav2_core REQUIRED)
+
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  # the following line skips the linter which checks for copyrights
+  # comment the line when a copyright and license is added to all source files
+  set(ament_cmake_copyright_FOUND TRUE)
+  # the following line skips cpplint (only works in a git repo)
+  # comment the line when this package is in a git repo and when
+  # a copyright and license is added to all source files
+  set(ament_cmake_cpplint_FOUND TRUE)
+  ament_lint_auto_find_test_dependencies()
+endif()
+
+# 包含头文件目录
+include_directories(include)
+# 定义库名称
+set(library_name ${PROJECT_NAME}_plugin)
+# 创建共享库
+add_library(${library_name} SHARED src/custom_controller.cpp)
+# 指定库的依赖关系
+ament_target_dependencies(${library_name} nav2_core pluginlib)
+# 安装库文件到指定目录
+install(TARGETS ${library_name}
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+# 安装头文件到指定目录
+install(DIRECTORY include/
+ DESTINATION include/)
+# 导出插件描述文件
+pluginlib_export_plugin_description_file(nav2_core nav2_custom_controller.xml)
+
+
+
+ament_package()
+
+```
+
+然后在package.xml里声明一下这个插件
+```xml
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>nav2_custom_controller</name>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="qsskwin@gmail.com">qss</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>pluginlib</depend>
+  <depend>nav2_core</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <nav2_core plugin="${prefix}/nav2_custom_controller.xml" />    
+  </export>
+</package>
+
+```
+然后colcon build即可
+
+## 8.3.3 实现自定义控制算法  
+实现流程图如下:   
+
+
+完整cpp实现:  
+```cpp
+#include "nav2_custom_controller/custom_controller.hpp"
+#include "nav2_core/exceptions.hpp"
+#include "nav2_util/geometry_utils.hpp"
+#include "nav2_util/node_utils.hpp"
+#include <algorithm>
+#include <chrono>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <thread>
+
+namespace nav2_custom_controller {
+void CustomController::configure(
+    const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent, std::string name,
+    std::shared_ptr<tf2_ros::Buffer> tf,
+    std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) {
+  node_ = parent.lock();
+  costmap_ros_ = costmap_ros;
+  tf_ = tf;
+  plugin_name_ = name;
+
+  // 声明并获取参数，设置最大线速度和最大角速度
+  nav2_util::declare_parameter_if_not_declared(
+      node_, plugin_name_ + ".max_linear_speed", rclcpp::ParameterValue(0.1));
+  node_->get_parameter(plugin_name_ + ".max_linear_speed", max_linear_speed_);
+  nav2_util::declare_parameter_if_not_declared(
+      node_, plugin_name_ + ".max_angular_speed", rclcpp::ParameterValue(1.0));
+  node_->get_parameter(plugin_name_ + ".max_angular_speed", max_angular_speed_);
+}
+
+void CustomController::cleanup() {
+  RCLCPP_INFO(node_->get_logger(),
+              "清理控制器：%s 类型为 nav2_custom_controller::CustomController",
+              plugin_name_.c_str());
+}
+
+void CustomController::activate() {
+  RCLCPP_INFO(node_->get_logger(),
+              "激活控制器：%s 类型为 nav2_custom_controller::CustomController",
+              plugin_name_.c_str());
+}
+
+void CustomController::deactivate() {
+  RCLCPP_INFO(node_->get_logger(),
+              "停用控制器：%s 类型为 nav2_custom_controller::CustomController",
+              plugin_name_.c_str());
+}
+
+geometry_msgs::msg::TwistStamped CustomController::computeVelocityCommands(
+    const geometry_msgs::msg::PoseStamped &pose,
+    const geometry_msgs::msg::Twist &, nav2_core::GoalChecker *) {
+    // 1. 检查路径是否为空
+  if (global_plan_.poses.empty()) {
+    throw nav2_core::PlannerException("收到长度为零的路径");
+  }
+
+  // 2.将机器人当前姿态转换到全局计划坐标系中
+  geometry_msgs::msg::PoseStamped pose_in_globalframe;
+  if (!nav2_util::transformPoseInTargetFrame(
+          pose, pose_in_globalframe, *tf_, global_plan_.header.frame_id, 0.1)) {
+    throw nav2_core::PlannerException("无法将机器人姿态转换为全局计划的坐标系");
+  }
+
+  // 3.获取最近的目标点和计算角度差
+  auto target_pose = getNearestTargetPose(pose_in_globalframe);
+  auto angle_diff = calculateAngleDifference(pose_in_globalframe, target_pose);
+
+  // 4.根据角度差计算线速度和角速度
+  geometry_msgs::msg::TwistStamped cmd_vel;
+  cmd_vel.header.frame_id = pose_in_globalframe.header.frame_id;
+  cmd_vel.header.stamp = node_->get_clock()->now();
+  // 根据角度差计算速度，角度差大于 0.3 则原地旋转，否则直行
+  if (fabs(angle_diff) > M_PI/10.0) {
+    cmd_vel.twist.linear.x = .0;
+    cmd_vel.twist.angular.z = fabs(angle_diff) / angle_diff * max_angular_speed_;
+  } else {
+    cmd_vel.twist.linear.x = max_linear_speed_;
+    cmd_vel.twist.angular.z = .0;
+  }
+  RCLCPP_INFO(node_->get_logger(), "控制器：%s 发送速度(%f,%f)",
+              plugin_name_.c_str(), cmd_vel.twist.linear.x,
+              cmd_vel.twist.angular.z);
+  return cmd_vel;
+}
+
+void CustomController::setSpeedLimit(const double &speed_limit,
+                                     const bool &percentage) {
+  (void)percentage;
+  (void)speed_limit;
+}
+
+void CustomController::setPlan(const nav_msgs::msg::Path &path) {
+  global_plan_ = path;
+}
+
+geometry_msgs::msg::PoseStamped CustomController::getNearestTargetPose(
+    const geometry_msgs::msg::PoseStamped &current_pose) {
+   // 1.遍历路径获取路径中距离当前点最近的索引，存储到 nearest_pose_index
+  using nav2_util::geometry_utils::euclidean_distance;
+  int nearest_pose_index = 0;
+  double min_dist = euclidean_distance(current_pose, global_plan_.poses.at(0));
+  for (unsigned int i = 1; i < global_plan_.poses.size(); i++) {
+    double dist = euclidean_distance(current_pose, global_plan_.poses.at(i));
+    if (dist < min_dist) {
+      nearest_pose_index = i;
+      min_dist = dist;
+    }
+  }
+  // 2.从路径中擦除头部到最近点的路径
+  global_plan_.poses.erase(std::begin(global_plan_.poses),
+                           std::begin(global_plan_.poses) + nearest_pose_index);
+  // 3.如果只有一个点则直接，否则返回最近点的下一个点
+  if (global_plan_.poses.size() == 1) {
+    return global_plan_.poses.at(0);
+  }
+  return global_plan_.poses.at(1);
+}
+
+double CustomController::calculateAngleDifference(
+    const geometry_msgs::msg::PoseStamped &current_pose,
+    const geometry_msgs::msg::PoseStamped &target_pose) {
+ // 计算当前姿态与目标姿态之间的角度差
+  // 1. 获取当前角度
+  float current_robot_yaw = tf2::getYaw(current_pose.pose.orientation);
+  // 2.获取目标点朝向
+  float target_angle =
+      std::atan2(target_pose.pose.position.y - current_pose.pose.position.y,
+                 target_pose.pose.position.x - current_pose.pose.position.x);
+  // 3.计算角度差，并转换到 -M_PI 到 M_PI 之间
+  double angle_diff = target_angle - current_robot_yaw;
+  if (angle_diff < -M_PI) {
+    angle_diff += 2.0 * M_PI;
+  } else if (angle_diff > M_PI) {
+    angle_diff -= 2.0 * M_PI;
+  }
+  return angle_diff;
+}
+} // namespace nav2_custom_controller
+
+#include "pluginlib/class_list_macros.hpp"
+PLUGINLIB_EXPORT_CLASS(nav2_custom_controller::CustomController,nav2_core::Controller)
+```
+然后构建即可.  
+## 8.3.4 配置导航参数并测试  
+改nav2的yaml.
+```yaml
+    FollowPath:
+      plugin: "nav2_custom_controller::CustomController"
+      max_linear_speed: 0.1
+      max_angular_speed: 1.0
+```
+然后运行仿真即可  
+
+想学习更多就应该去看navigation2的源码  
