@@ -5202,3 +5202,232 @@ Qos ： Quality of Service
 ## 10.1.2 QoS的兼容性  
 ![alt text](assets/README/image-16.png)
 ![alt text](assets/README/image-17.png)
+## 10.1.3 Python QoS兼容性测试  
+```python
+import rclpy
+from rclpy.node import Node
+from nav_msgs.msg import Odometry
+from rclpy import qos
+from rclpy.duration import Duration
+
+
+
+class OdomPublisherSubscriber(Node):
+
+    def __init__(self):
+        super().__init__('odom_publisher_subscriber')
+        # 创建发布者并设置QoS为sensor
+        qos_profile = qos.QoSProfile(
+            depth=10,  # 队列深度
+            reliability=qos.ReliabilityPolicy.BEST_EFFORT,  # 可靠性
+            durability=qos.DurabilityPolicy.TRANSIENT_LOCAL,  # 持久性
+            history=qos.HistoryPolicy.KEEP_LAST,  # 历史记录策略
+            deadline=Duration(seconds=1.0, nanoseconds=0),
+        )
+        # 在订阅和发布中使用
+        self.odom_publisher = self.create_publisher(Odometry, 'odom', qos_profile)
+        # 创建订阅者（默认QoS配置）队列深度设置为 5
+        self.odom_subscriber = self.create_subscription(
+            Odometry, 'odom', self.odom_callback,qos.qos_profile_sensor_data)
+        # 创建一个1秒的定时器，并指定回调函数
+        self.timer = self.create_timer(1.0, self.timer_callback)
+
+    def odom_callback(self, msg):
+        self.get_logger().info('收到里程计消息')
+
+    def timer_callback(self):
+        odom_msg = Odometry()  # 创建一个Odometry消息
+        self.odom_publisher.publish(odom_msg)  # 发布消息
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    odom_node = OdomPublisherSubscriber()
+    rclpy.spin(odom_node)
+    rclpy.shutdown()
+```
+## 10.1.4 CppQoS兼容性测试  
+```cpp
+#include <nav_msgs/msg/odometry.hpp>
+#include <rclcpp/rclcpp.hpp>
+
+class OdomPublisherSubscriber : public rclcpp::Node
+{
+public:
+    OdomPublisherSubscriber() : Node("odom_publisher_subscriber")
+    {
+        rclcpp::QoS qos_profile(10);                                       // 队列深度为10
+        qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);   // 可靠性策略
+        qos_profile.durability(RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL); // 持久性策略
+        qos_profile.history(RMW_QOS_POLICY_HISTORY_KEEP_LAST);             // 历史记录策略
+        qos_profile.deadline(rclcpp::Duration(1, 0));                      // 截止时间为1秒
+
+        odom_publisher_ = this->create_publisher<nav_msgs::msg::Odometry>(
+            "odom", qos_profile);
+
+        // // 创建发布者并设置QoS为sensor
+        // odom_publisher_ = this->create_publisher<nav_msgs::msg::Odometry>(
+        //     "odom", rclcpp::SensorDataQoS());
+
+        // 创建订阅者（默认QoS配置）队列深度设置为 5
+        // odom_subscription_ = this->create_subscription<nav_msgs::msg::Odometry>(
+        //     "odom", 5,
+        //     [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
+        //       (void)msg;
+        //       RCLCPP_INFO(this->get_logger(), "收到里程计消息");
+        //     });
+
+        odom_subscription_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            "odom", rclcpp::SensorDataQoS(),
+            [this](const nav_msgs::msg::Odometry::SharedPtr msg)
+            {
+                (void)msg;
+                RCLCPP_INFO(this->get_logger(), "收到里程计消息");
+            });
+
+        // 创建一个1秒的定时器，并指定回调函数
+        timer_ = this->create_wall_timer(std::chrono::seconds(1), [this]()
+                                         { odom_publisher_->publish(nav_msgs::msg::Odometry()); });
+    }
+
+private:
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_publisher_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscription_;
+    rclcpp::TimerBase::SharedPtr timer_;
+};
+
+int main(int argc, char *argv[])
+{
+    rclcpp::init(argc, argv);
+    auto odom_node = std::make_shared<OdomPublisherSubscriber>();
+    rclcpp::spin(odom_node);
+    rclcpp::shutdown();
+    return 0;
+}
+```
+
+# 10.2 执行器和回调组  
+## 10.2.1 执行器与回调组的介绍  
+ROS2中的执行管理是由执行器Executor处理.执行器使用底层操作系统的一个或多个线程来调用订阅,定时器,服务等的回调,以响应收到的消息和事件.  
+Executor执行流程图:  
+
+
+ros2允许将节点的回调组织成组,回调组配合多线程执行器,可以实现让回调函数在单独的线程中进行.  
+## 10.2.2 在Python中使用回调组  
+
+在默认的情况下,timer和service是在同一个回调组里的,还是互斥回调组
+
+```python
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor  #单线程执行器
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup #互斥回调组 可重入回调组
+from std_msgs.msg import String  
+from example_interfaces.srv import AddTwoInts
+import threading
+import time
+
+
+class LearnExecutorNode(Node):
+    def __init__(self):
+        super().__init__('learn_executor')
+        self.publisher = self.create_publisher(String, 'string_topic', 10)
+        self.timer = self.create_timer(1.0, self.timer_callback)
+        my_callback_group = ReentrantCallbackGroup() 
+        self.service = self.create_service(
+            AddTwoInts, 'add_two_ints', self.add_two_ints_callback,
+            callback_group=my_callback_group)
+        # self.service = self.create_service(
+        #     AddTwoInts, 'add_two_ints', self.add_two_ints_callback)
+
+    def timer_callback(self):
+        msg = String()
+        msg.data = f'话题发布，线程ID:{threading.get_ident()} 线程总数:{threading.active_count()}'
+        self.get_logger().info(msg.data)
+        self.publisher.publish(msg)
+
+    def add_two_ints_callback(self, request: AddTwoInts.Request, response: AddTwoInts.Response):
+        self.get_logger().info(f'处理服务，线程ID:{threading.get_ident()}')
+        time.sleep(10)  # 模拟处理延时
+        response.sum = request.a + request.b
+        self.get_logger().info(f'处理完成，线程ID:{threading.get_ident()}')
+        return response
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = LearnExecutorNode()
+    # executor = SingleThreadedExecutor()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    executor.spin()
+    rclpy.shutdown()
+```
+## 10.2.3 在cpp中使用回调组
+
+```cpp
+#include "example_interfaces/srv/add_two_ints.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/string.hpp"
+#include <sstream>
+
+class LearnExecutorNode : public rclcpp::Node {
+public:
+  LearnExecutorNode() : Node("learn_executor") {
+    publisher_ =
+        this->create_publisher<std_msgs::msg::String>("string_topic", 10);
+    timer_ = this->create_wall_timer(
+        std::chrono::seconds(1),
+        std::bind(&LearnExecutorNode::timer_callback, this));
+    service_callback_group_ = this->create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);  // 互斥回调组
+    service_ = this->create_service<example_interfaces::srv::AddTwoInts>(
+        "add_two_ints",
+        std::bind(&LearnExecutorNode::add_two_ints_callback, this,
+                  std::placeholders::_1, std::placeholders::_2),
+        rmw_qos_profile_services_default, service_callback_group_);
+  }
+
+private:
+  void timer_callback() {
+    auto msg = std_msgs::msg::String();
+    msg.data = "话题发布：" + thread_info();
+    RCLCPP_INFO(this->get_logger(), msg.data.c_str());
+    publisher_->publish(msg);
+  }
+
+  std::string thread_info() {
+    std::ostringstream thread_str;
+    thread_str << "线程ID：" << std::this_thread::get_id();
+    return thread_str.str();
+  }
+
+  void add_two_ints_callback(
+      const std::shared_ptr<example_interfaces::srv::AddTwoInts::Request>
+          request,
+      std::shared_ptr<example_interfaces::srv::AddTwoInts::Response> response) {
+    RCLCPP_INFO(this->get_logger(), "服务开始处理：%s", thread_info().c_str());
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+    response->sum = request->a + request->b;
+    RCLCPP_INFO(this->get_logger(), "服务处理完成：%s", thread_info().c_str());
+  }
+
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr publisher_;
+  rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::Service<example_interfaces::srv::AddTwoInts>::SharedPtr service_;
+  rclcpp::CallbackGroup::SharedPtr service_callback_group_;
+};
+
+int main(int argc, char *argv[]) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<LearnExecutorNode>();
+//   auto executor = rclcpp::executors::SingleThreadedExecutor();
+  auto executor = rclcpp::executors::MultiThreadedExecutor();
+  executor.add_node(node);
+  executor.spin();
+  rclcpp::shutdown();
+  return 0;
+}
+```
+# 10.3 生命周期节点  
+## 10.3.1 生命周期节点介绍
