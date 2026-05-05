@@ -5194,3 +5194,11 @@ PLUGINLIB_EXPORT_CLASS(nav2_custom_controller::CustomController,nav2_core::Contr
 然后运行仿真即可  
 
 想学习更多就应该去看navigation2的源码  
+# 第十章 ROS2使用进阶  
+# 10.1 QoS
+## 10.1.1 QoS策略介绍  
+Qos ： Quality of Service  
+![alt text](assets/README/image-15.png)
+## 10.1.2 QoS的兼容性  
+![alt text](assets/README/image-16.png)
+![alt text](assets/README/image-17.png)
