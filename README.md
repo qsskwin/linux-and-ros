@@ -5431,3 +5431,503 @@ int main(int argc, char *argv[]) {
 ```
 # 10.3 生命周期节点  
 ## 10.3.1 生命周期节点介绍
+`ros2 run lifecycle lifecycle_talker` 声明周期节点示例   
+node list和 topic list可以查看当前节点及其话题,使用`ros2 topic echo /lc_talker/transition_event`可以输出该话题中的内容   
+`ros2 service list -t`可以查看服务节点,`ros2 service call /lc_talker/get_state lifecycle_msgs/srv/GetState`可以调用该服务    
+流程图如下:  
+
+
+`ros2 lifecycle list /lc_talker` 可以查看能切换到哪些状态   
+`ros2 lifecycle set /lc_talker configure` 可以进行状态转换,转换到待激活状态.  
+该状态下,会出现新的话题,但话题还是空的,在激活状态下就会发送数据,可以echo输出   
+不想要该节点的时候就shutdown,想暂停节点的时候就让其进入待激活状态.    
+## 10.3.2 Python编写生命周期节点  
+```py
+import rclpy
+from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn
+
+class LearnLifeCycleNode(LifecycleNode):
+    def __init__(self):
+        super().__init__('lifecyclenode')
+        self.timer_period = 0
+        self.timer_ = None
+        self.get_logger().info(f'{self.get_name()}:已创建')
+
+    def timer_callback(self):
+        self.get_logger().info('定时器打印进行中...')
+
+    def on_configure(self, state):    
+        self.timer_period = 1.0  # 设置定时器周期
+        self.get_logger().info('on_configure():配置周期 timer_period')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_activate(self, state):
+        self.timer_ = self.create_timer(self.timer_period, self.timer_callback)
+        self.get_logger().info('on_activate():处理激活指令，创建定时器')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_deactivate(self, state):
+        self.destroy_timer(self.timer_) # 销毁定时器
+        self.get_logger().info('on_deactivate():处理失活指令停止定时器')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_cleanup(self, state):
+        self.timer_ = None
+        self.timer_period = 0
+        self.get_logger().info('on_cleanup():处理清理指令')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_shutdown(self, state):
+        #  定时器未销毁则销毁
+        if self.timer_: self.destroy_timer(self.timer_)
+        self.get_logger().info('on_shutdown():处理关闭指令')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_error(self, state):
+        # 直接调用父类处理
+        return super().on_error(state)
+
+def main():
+    rclpy.init()
+    node = LearnLifeCycleNode()
+    rclpy.spin(node)
+    rclpy.shutdown()
+```
+关于id的配置讲解在书籍中有写,可以对应学习   
+## 10.3.3 Cpp编写生命周期节点  
+
+```cpp
+#include "rclcpp/rclcpp.hpp"
+#include "rclcpp_lifecycle/lifecycle_node.hpp"
+
+using CallbackReturn =
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;  //一般来说,小写是命名空间,大写是类,最后一个一定是类型,变量,或者函数.
+
+class LearnLifeCycleNode : public rclcpp_lifecycle::LifecycleNode {
+public:
+  LearnLifeCycleNode()
+      : rclcpp_lifecycle::LifecycleNode("lifecyclenode") {
+    timer_period_ = 1.0;
+    timer_ = nullptr;
+    RCLCPP_INFO(get_logger(), "%s: 已创建", get_name());
+  }
+
+  CallbackReturn on_configure(const rclcpp_lifecycle::State &state) override {
+    (void)state;
+    timer_period_ = 1.0;
+    RCLCPP_INFO(get_logger(), "on_configure():配置周期 timer_period");
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
+        CallbackReturn::SUCCESS;
+  }
+
+  CallbackReturn on_activate(const rclcpp_lifecycle::State &state) override {
+    (void)state;
+    timer_ = create_wall_timer(
+        std::chrono::seconds(static_cast<int>(timer_period_)),
+        [this]() { RCLCPP_INFO(get_logger(), "定时器打印进行中..."); });
+    RCLCPP_INFO(get_logger(), "on_activate():处理激活指令，创建定时器");
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
+        CallbackReturn::SUCCESS;
+  }
+
+  CallbackReturn on_deactivate(const rclcpp_lifecycle::State &state) override {
+    (void)state;
+    timer_.reset();
+    RCLCPP_INFO(get_logger(), "on_deactivate():处理失活指令，停止定时器");
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
+        CallbackReturn::SUCCESS;
+  }
+
+  CallbackReturn on_shutdown(const rclcpp_lifecycle::State &state) override {
+    (void)state;
+    timer_.reset();
+    RCLCPP_INFO(get_logger(), "on_shutdown():处理关闭指令");
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
+        CallbackReturn::SUCCESS;
+  }
+
+private:
+  rclcpp::TimerBase::SharedPtr timer_;
+  double timer_period_;
+};
+
+int main(int argc, char **argv) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<LearnLifeCycleNode>();
+  rclcpp::spin(node->get_node_base_interface());
+  rclcpp::shutdown();
+  return 0;
+}
+```
+
+# 10.4 t同一进程组织多个节点  
+## 10.4.1 使用执行器组织多个节点  
+
+`ros2 run intra_process_demo two_node_pipeline`在同一进程内测试数据交换,只适用于同一主机中  
+创建一个cpp的功能包learn_compose,在其include下的compose中创建.hpp
+```cpp
+#ifndef LEARN_COMPOSE__TALKER_COMPONENT_HPP_
+#define LEARN_COMPOSE__TALKER_COMPONENT_HPP_
+
+#include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/int32.hpp"
+
+namespace learn_compose {
+
+class Talker : public rclcpp::Node {
+public:
+  explicit Talker(const rclcpp::NodeOptions &options);
+
+private:
+  int32_t count_;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_;
+  rclcpp::TimerBase::SharedPtr timer_;
+};
+
+} // namespace learn_compose
+
+#endif // LEARN_COMPOSE__TALKER_COMPONENT_HPP_
+```
+然后再创建cpp文件  
+
+```cpp
+#include <chrono>
+#include "learn_compose/talker.hpp"
+
+namespace learn_compose {
+
+using namespace std::chrono_literals;
+
+Talker::Talker(const rclcpp::NodeOptions &options) : Node("talker", options) {
+  pub_ = this->create_publisher<std_msgs::msg::Int32>("count", 10);
+  auto callback = [&]() -> void {
+    std_msgs::msg::Int32::UniquePtr msg(new std_msgs::msg::Int32());  
+    msg->data = count_++;
+    RCLCPP_INFO(this->get_logger(), "发布数据:%d(0x%lX)", msg->data,
+                reinterpret_cast<std::uintptr_t>(msg.get()));
+    pub_->publish(std::move(msg)); //移动所有权
+  };
+  timer_ = this->create_wall_timer(1s, callback);
+}
+} // namespace  learn_compose
+
+
+
+// #include "rclcpp_components/register_node_macro.hpp"
+// RCLCPP_COMPONENTS_REGISTER_NODE(learn_compose::Talker)
+```
+
+再创建listener的cpp和hpp,首先创建hpp   
+```cpp
+#ifndef LEARN_COMPOSE__LISTENER_COMPONENT_HPP_
+#define LEARN_COMPOSE__LISTENER_COMPONENT_HPP_
+
+#include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/int32.hpp"
+
+namespace learn_compose {
+
+class Listener : public rclcpp::Node {
+public:
+  explicit Listener(const rclcpp::NodeOptions &options);
+
+private:
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_;
+};
+
+} // namespace learn_compose
+
+#endif // LEARN_COMPOSE__LISTENER_COMPONENT_HPP_
+```
+.cpp文件
+```cpp
+#include "learn_compose/listener.hpp"
+#include <chrono>
+
+namespace learn_compose {
+
+using namespace std::chrono_literals;
+
+Listener::Listener(const rclcpp::NodeOptions &options)
+    : Node("listener", options) {
+  sub_ = this->create_subscription<std_msgs::msg::Int32>(
+      "count", 10, [&](const std_msgs::msg::Int32::UniquePtr msg) {
+        RCLCPP_INFO(this->get_logger(), "收到数据:%d(0x%lX)", msg->data,
+                    reinterpret_cast<std::uintptr_t>(msg.get()));
+      });
+}
+} // namespace  learn_compose
+
+
+// #include "rclcpp_components/register_node_macro.hpp"
+// RCLCPP_COMPONENTS_REGISTER_NODE(learn_compose::Listener)
+```
+
+除此之外,还需要建立一个intra_process_pubsub.cpp 实现进程内发布和订阅  
+```cpp
+#include "learn_compose/listener.hpp"
+#include "learn_compose/talker.hpp"
+#include "rclcpp/rclcpp.hpp"
+
+int main(int argc, char *argv[]) {
+  rclcpp::init(argc, argv);
+  rclcpp::executors::SingleThreadedExecutor executor;
+
+  rclcpp::NodeOptions options;           // 创建节点选项
+  options.use_intra_process_comms(true); // 使用进程内通信
+  auto talker = std::make_shared<learn_compose::Talker>(options);
+  auto listener = std::make_shared<learn_compose::Listener>(options);
+
+  executor.add_node(talker);
+  executor.add_node(listener);
+  executor.spin();
+
+  rclcpp::shutdown();
+
+  return 0;
+}
+```
+添加cmakelist,然后编译     
+运行即可看见在同一进程内进行节点交换  
+
+## 10.4.2 使用组件运行组合节点  
+使用组件可以动态的将不同的节点加载到一个进程,也可以动态卸载  
+
+`ros2 component types` 查看当前可用的组件
+`ros2 run rclcpp_components component_container --ros-args -r __node:=compent_test`启动组件的节点
+`ros2 component load /compent_test composition composition::Talker` 将节点加到那个组件里,还可以修改命名空间等,在这个后面加上 --node-name talker3 --node-namespace /ns    
+ `ros2 component unload /compent_test 1 2 3`这些命令来卸载组件内的节点 建议看视频  
+ 还可以用launch进行启动  
+ ## 10.4.3 编写自己的组件  
+ 将talker.cpp里的include取消注释即可,然后修改cmakelist,编译成动态链接库,有点类似于当时那个动态插件的注册 
+ 10.4这一节都强烈建议重新观看一遍视频,这个容器组合节点运行还是挺有好处的  
+
+# 10.5 使用消息过滤器同步数据 
+
+## 10.5.1 消息过滤器介绍 
+
+使用时间同步器,将同步策略和订阅者传递给时间同步器,由它完成时间同步,并调用相应的回调函数传递同步结果.同步策略有很多,例如严格时间对齐,大约时间对齐,最新时间对齐等  
+
+## 10.5.2 在python中同步传感器数据
+ ```py
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+from nav_msgs.msg import Odometry
+from message_filters import Subscriber, ApproximateTimeSynchronizer
+
+class TimeSyncTestNode(Node):
+    def __init__(self):
+        super().__init__('sync_node')
+        # 1. 订阅 imu 话题并注册回调并打印时间戳
+        self.imu_sub = Subscriber(self, Imu, 'imu')
+        self.imu_sub.registerCallback(self.imu_callback)
+        # 2. 订阅 odom 话题并注册回调函数打印时间戳
+        self.odom_sub = Subscriber(self, Odometry, 'odom')
+        self.odom_sub.registerCallback(self.odom_callback)
+        # 3. 创建对应策略的同步器同步两个话题，并注册回调函数打印数据
+        self.synchronizer = ApproximateTimeSynchronizer(
+            [self.imu_sub, self.odom_sub], 10,
+            slop=0.01,  # slop 表示时间窗口单位为秒
+        )
+        self.synchronizer.registerCallback(self.result_callback)
+
+    def imu_callback(self, imu_msg):
+        self.get_logger().info(
+            f'imu({imu_msg.header.stamp.sec},{imu_msg.header.stamp.nanosec})')
+
+    def odom_callback(self, odom_msg):
+        self.get_logger().info(
+            f'odom({odom_msg.header.stamp.sec},{odom_msg.header.stamp.nanosec})')
+
+    def result_callback(self, imu_msg, odom_msg):
+        self.get_logger().info(
+            f'imu({imu_msg.header.stamp.sec},{imu_msg.header.stamp.nanosec}),odom({odom_msg.header.stamp.sec},{odom_msg.header.stamp.nanosec})')
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TimeSyncTestNode()
+    rclpy.spin(node)
+    rclpy.shutdown()
+ ```
+这里要运行还需要另一个发布这两个数据的功能包,在仓库里[fish](https://gitee.com/fishros/ros2bookcode/blob/master/chapt10/rosbag2_message_filter/rosbag2_message_filter.db3)   
+
+## 10.5.3 在cpp中同步传感器数据  
+
+```cpp
+#include "message_filters/subscriber.h"
+#include "message_filters/sync_policies/approximate_time.h"
+#include "message_filters/sync_policies/exact_time.h"
+#include "message_filters/sync_policies/latest_time.h"
+#include "message_filters/time_synchronizer.h"
+#include "nav_msgs/msg/odometry.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/imu.hpp"
+
+using Imu = sensor_msgs::msg::Imu;
+using Odometry = nav_msgs::msg::Odometry;
+using namespace message_filters;
+
+// 同步策略：严格时间对齐策略
+// using MySyncPolicy = sync_policies::ExactTime<Imu, Odometry>;
+// 同步策略：大约时间对齐策略
+// using MySyncPolicy = sync_policies::ApproximateTime<Imu, Odometry>;
+// 同步策略：最新时间对齐策略
+using MySyncPolicy = sync_policies::LatestTime<Imu, Odometry>;
+
+
+class TimeSyncTestNode : public rclcpp::Node {
+public:
+  TimeSyncTestNode() : Node("sync_node") {
+    // 1.订阅 imu 话题并注册回调并打印时间戳
+    imu_sub_ = std::make_shared<Subscriber<Imu>>(this, "imu");
+    imu_sub_->registerCallback<Imu::SharedPtr>(
+        [&](const Imu::SharedPtr &imu_msg) {
+          RCLCPP_INFO(get_logger(), "imu(%u,%u)", imu_msg->header.stamp.sec,
+                      imu_msg->header.stamp.nanosec);
+        });
+    // 2.订阅 odom 话题并注册回调函数打印时间戳
+    odom_sub_ = std::make_shared<Subscriber<Odometry>>(this, "odom");
+    odom_sub_->registerCallback<Odometry::SharedPtr>(
+        [&](const Odometry::SharedPtr &odom_msg) {
+          RCLCPP_INFO(get_logger(), "odom(%u,%u)", odom_msg->header.stamp.sec,
+                      odom_msg->header.stamp.nanosec);
+        });
+    // 3.创建对应策略的同步器同步两个话题，并注册回调函数打印数据
+    // synchronizer_ = std::make_shared<Synchronizer<MySyncPolicy>>(
+    //     MySyncPolicy(10), *imu_sub_, *odom_sub_);
+    
+    // 3.创建对应策略的同步器同步两个话题，并注册回调函数打印数据
+    synchronizer_ = std::make_shared<Synchronizer<MySyncPolicy>>(
+        MySyncPolicy(), *imu_sub_, *odom_sub_);
+    synchronizer_->registerCallback(
+        std::bind(&TimeSyncTestNode::result_callback, this,
+                  std::placeholders::_1, std::placeholders::_2));
+  }
+
+private:
+  void result_callback(const Imu::ConstSharedPtr imu_msg,
+                       const Odometry::ConstSharedPtr odom_msg) {
+    RCLCPP_INFO(get_logger(), "imu(%u,%u),odom(%u,%u))",
+                imu_msg->header.stamp.sec, imu_msg->header.stamp.nanosec,
+                odom_msg->header.stamp.sec, odom_msg->header.stamp.nanosec);
+  }
+
+  std::shared_ptr<Subscriber<Imu>> imu_sub_;
+  std::shared_ptr<Subscriber<Odometry>> odom_sub_;
+  std::shared_ptr<Synchronizer<MySyncPolicy>> synchronizer_;
+};
+
+int main(int argc, char **argv) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<TimeSyncTestNode>();
+  rclcpp::spin(node);
+  rclcpp::shutdown();
+  return 0;
+}
+```
+这些都记得在cmakelist或者setup.py中进行声明   
+# 10.6 DDS中间件进阶  
+## 10.6.1 使用不同的DDS进行通信  
+如图:   
+
+humble默认的是fastDDS   
+## 10.6.2 配置局域网通信  
+如图:     
+
+使用export ROS_LOCALHOST_ONLY = 1 可以限制节点不进行局域网的发现  
+
+## 10.6.3 调整DDS的配置  
+如图:    
+
+```xml
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+
+    <!-- 默认发布者配置 -->
+    <publisher profile_name="default_publisher" is_default_profile="true">
+        <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+    </publisher>
+
+    <!-- 默认订阅者配置 -->
+    <subscriber profile_name="default_subscriber" is_default_profile="true">
+        <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+    </subscriber>
+
+   <!-- 话题 chatter 的发布者配置 -->
+    <publisher profile_name="/chatter">
+        <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+        <matchedSubscribersAllocation>
+            <initial>0</initial>
+            <maximum>1</maximum>
+            <increment>1</increment>
+        </matchedSubscribersAllocation>
+    </publisher>
+</profiles>
+
+```
+## 10.6.4 使用DDS共享内存  
+```cpp
+#include "rclcpp/loaned_message.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/int32.hpp"
+
+class LoanedMessagePublisher : public rclcpp::Node {
+public:
+  LoanedMessagePublisher() : Node("loaned_message_publisher") {
+    publisher_ =
+        this->create_publisher<std_msgs::msg::Int32>("loaned_int_topic", 10);
+    timer_ = this->create_wall_timer(std::chrono::seconds(1), [&]() {
+      auto message = publisher_->borrow_loaned_message(); // 1.租借消息
+      message.get().data = count_++;  // 2.放入数据
+      RCLCPP_INFO(this->get_logger(), "发布数据:%d", message.get().data);
+      publisher_->publish(std::move(message));  // 3.发布数据
+    });
+  }
+
+private:
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr publisher_;
+  rclcpp::TimerBase::SharedPtr timer_;
+  int32_t count_{0};
+};
+
+int main(int argc, char **argv) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<LoanedMessagePublisher>();
+  rclcpp::spin(node);
+  rclcpp::shutdown();
+  return 0;
+}
+```
+
+配置shm.xml文件  
+```xml
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+
+  <data_writer profile_name="default publisher profile" is_default_profile="true">
+    <qos>
+      <publishMode>
+        <kind>SYNCHRONOUS</kind>
+      </publishMode>
+      <data_sharing>
+        <kind>AUTOMATIC</kind>
+      </data_sharing>
+    </qos>
+    <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+  </data_writer>
+
+  <data_reader profile_name="default subscription profile" is_default_profile="true">
+    <qos>
+      <data_sharing>
+        <kind>AUTOMATIC</kind>
+      </data_sharing>
+    </qos>
+    <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+  </data_reader>
+</profiles>
+
+```
+
+完结撒花~
